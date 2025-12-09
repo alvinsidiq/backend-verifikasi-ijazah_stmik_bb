@@ -6,22 +6,24 @@
   "scripts": {
     "test": "echo \"Error: no test specified\" && exit 1",
     "dev": "nodemon src/server.js",
-  "start": "node src/server.js",
-  "prisma:migrate": "prisma migrate dev",
-  "prisma:studio": "prisma studio"
+    "start": "node src/server.js",
+    "prisma:migrate": "prisma migrate dev",
+    "prisma:studio": "prisma studio"
   },
   "keywords": [],
   "author": "",
   "license": "ISC",
   "dependencies": {
-    "@prisma/client": "^7.1.0",
+    "@prisma/client": "^5.22.0",
+    "bcryptjs": "^3.0.3",
     "cors": "^2.8.5",
     "dotenv": "^17.2.3",
     "express": "^5.2.1",
+    "jsonwebtoken": "^9.0.3",
     "morgan": "^1.10.1"
   },
   "devDependencies": {
     "nodemon": "^3.1.11",
-    "prisma": "^7.1.0"
+    "prisma": "^5.22.0"
   }
 }
