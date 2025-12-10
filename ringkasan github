@@ -1,0 +1,12 @@
+git checkout main
+git pull origin main
+git checkout -b feature/register
+
+# ngoding...
+git add .
+git commit -m "Add register endpoint for admin"
+git push -u origin feature/register
+
+# PR & merge di GitHub
+git checkout main
+git pull origin main
