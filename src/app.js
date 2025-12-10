@@ -3,6 +3,8 @@ const express = require('express');
 const cors = require('cors');
 const morgan = require('morgan');
 const programStudiRoutes = require('./routes/programStudi.routes');
+const mahasiswaRoutes = require('./routes/mahasiswa.routes');
+
 require('dotenv').config();
 
 
@@ -27,6 +29,12 @@ app.get('/health', (req, res) => {
 
 // route auth
 app.use('/auth', authRoutes);
+
+// route program studi
 app.use('/program-studi', programStudiRoutes);
+
+
+// route mahasiswa
+app.use('/mahasiswa', mahasiswaRoutes);
 
 module.exports = app;
