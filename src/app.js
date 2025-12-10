@@ -2,6 +2,7 @@
 const express = require('express');
 const cors = require('cors');
 const morgan = require('morgan');
+const programStudiRoutes = require('./routes/programStudi.routes');
 require('dotenv').config();
 
 
@@ -26,6 +27,6 @@ app.get('/health', (req, res) => {
 
 // route auth
 app.use('/auth', authRoutes);
-
+app.use('/program-studi', programStudiRoutes);
 
 module.exports = app;

@@ -31,3 +31,14 @@ model User {
   createdAt    DateTime @default(now())
   updatedAt    DateTime @updatedAt 
 }
+
+
+model ProgramStudi {
+  id        Int      @id @default(autoincrement())
+  kodeProdi String   @unique
+  namaProdi String
+  jenjang   String   // contoh: "D3", "S1", "S2"
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+} 
+
