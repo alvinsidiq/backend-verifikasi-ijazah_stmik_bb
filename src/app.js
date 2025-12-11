@@ -4,6 +4,7 @@ const cors = require('cors');
 const morgan = require('morgan');
 const programStudiRoutes = require('./routes/programStudi.routes');
 const mahasiswaRoutes = require('./routes/mahasiswa.routes');
+const ijazahRoutes = require('./routes/ijazah.routes');
 
 require('dotenv').config();
 
@@ -36,5 +37,10 @@ app.use('/program-studi', programStudiRoutes);
 
 // route mahasiswa
 app.use('/mahasiswa', mahasiswaRoutes);
+
+
+// route ijazah
+app.use('/ijazah', ijazahRoutes);
+
 
 module.exports = app;

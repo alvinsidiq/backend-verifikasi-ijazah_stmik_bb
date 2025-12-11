@@ -33,6 +33,7 @@ model User {
 
    // relasi ke Mahasiswa (satu user hanya boleh punya satu data mahasiswa)
   mahasiswa    Mahasiswa?
+  ijazahDiverifikasi Ijazah[] @relation("IjazahValidator")
 }
 
 
@@ -66,4 +67,37 @@ model Mahasiswa {
 
   createdAt    DateTime     @default(now())
   updatedAt    DateTime     @updatedAt
+
+  ijazah       Ijazah[]
 }
+
+model Ijazah {
+  id             Int             @id @default(autoincrement())
+  mahasiswaId    Int
+  mahasiswa      Mahasiswa       @relation(fields: [mahasiswaId], references: [id])
+
+  nomorIjazah    String          @unique
+  tanggalLulus   DateTime
+  fileUrl        String?
+
+  statusValidasi StatusValidasi  @default(DRAFT)
+
+  validatorId    Int?
+  validator      User?           @relation("IjazahValidator", fields: [validatorId], references: [id])
+
+  catatanValidasi String?
+  validatedAt     DateTime?
+
+  createdAt      DateTime        @default(now())
+  updatedAt      DateTime        @updatedAt
+}
+
+
+enum StatusValidasi {
+  DRAFT
+  MENUNGGU
+  TERVALIDASI
+  DITOLAK
+}
+
+
