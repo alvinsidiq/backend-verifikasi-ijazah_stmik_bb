@@ -5,6 +5,8 @@ const morgan = require('morgan');
 const programStudiRoutes = require('./routes/programStudi.routes');
 const mahasiswaRoutes = require('./routes/mahasiswa.routes');
 const ijazahRoutes = require('./routes/ijazah.routes');
+const verifikasiRoutes = require('./routes/verifikasi.routes');
+
 
 require('dotenv').config();
 
@@ -42,5 +44,8 @@ app.use('/mahasiswa', mahasiswaRoutes);
 // route ijazah
 app.use('/ijazah', ijazahRoutes);
 
+
+// route verifikasi publik
+app.use('/verifikasi', verifikasiRoutes);
 
 module.exports = app;
