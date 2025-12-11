@@ -55,4 +55,11 @@ router.post(
   IjazahController.validasi
 );
 
+// VALIDATOR & ADMIN: mint dummy ke "blockchain"
+router.post(
+  '/:id/mint',
+  roleMiddleware(['VALIDATOR', 'ADMIN']),
+  IjazahController.mintDummy
+);
+
 module.exports = router;
