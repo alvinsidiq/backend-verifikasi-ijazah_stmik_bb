@@ -1,6 +1,6 @@
 // src/controllers/ijazah.controller.js
 const prisma = require('../config/prisma');
-
+const blockchainService = require('../services/blockchain.service');
 const STATUS = {
   DRAFT: 'DRAFT',
   MENUNGGU: 'MENUNGGU',
@@ -413,6 +413,103 @@ const IjazahController = {
       });
     }
   },
+
+
+    // POST /ijazah/:id/mint  (ADMIN / VALIDATOR) - dummy mint ke "blockchain"
+  async mintDummy(req, res) {
+    try {
+      const id = parseInt(req.params.id, 10);
+
+      if (isNaN(id)) {
+        return res.status(400).json({
+          success: false,
+          message: 'ID tidak valid',
+        });
+      }
+
+      // Ambil ijazah + mahasiswa + prodi
+      const ijazah = await prisma.ijazah.findUnique({
+        where: { id },
+        include: {
+          mahasiswa: {
+            include: {
+              prodi: true,
+            },
+          },
+          blockchainRecord: true,
+        },
+      });
+
+      if (!ijazah) {
+        return res.status(404).json({
+          success: false,
+          message: 'Ijazah tidak ditemukan',
+        });
+      }
+
+      // Hanya ijazah yang sudah TERVALIDASI yang boleh di-mint
+      if (ijazah.statusValidasi !== 'TERVALIDASI') {
+        return res.status(400).json({
+          success: false,
+          message: `Ijazah dengan status ${ijazah.statusValidasi} belum bisa di-mint ke blockchain. Harus TERVALIDASI dulu.`,
+        });
+      }
+
+      // Cek apakah sudah pernah di-mint
+      if (ijazah.blockchainRecord) {
+        return res.status(400).json({
+          success: false,
+          message: 'Ijazah ini sudah memiliki record blockchain',
+          data: ijazah.blockchainRecord,
+        });
+      }
+
+      // Generate hash ijazah dari data mahasiswa + prodi + ijazah
+      const ijazahHash = blockchainService.generateIjazahHash(
+        ijazah,
+        ijazah.mahasiswa
+      );
+
+      // Dummy kirim ke "blockchain"
+      const bcResult = blockchainService.storeIjazahDummy(ijazahHash, ijazah.id);
+
+      // Simpan ke tabel BlockchainRecord
+      const blockchainRecord = await prisma.blockchainRecord.create({
+        data: {
+          ijazahId: ijazah.id,
+          ijazahHash: bcResult.ijazahHash,
+          contractAddress: bcResult.contractAddress,
+          network: bcResult.network,
+          txHash: bcResult.txHash,
+          blockNumber: bcResult.blockNumber,
+          statusOnchain: 'DUMMY', // sesuai enum
+          explorerUrl: bcResult.explorerUrl,
+        },
+      });
+
+      return res.json({
+        success: true,
+        message: 'Ijazah berhasil di-mint (dummy) ke blockchain',
+        data: {
+          ijazahId: ijazah.id,
+          ijazahHash: blockchainRecord.ijazahHash,
+          txHash: blockchainRecord.txHash,
+          contractAddress: blockchainRecord.contractAddress,
+          network: blockchainRecord.network,
+          blockNumber: blockchainRecord.blockNumber,
+          statusOnchain: blockchainRecord.statusOnchain,
+          explorerUrl: blockchainRecord.explorerUrl,
+        },
+      });
+    } catch (err) {
+      console.error('Error mintDummy ijazah:', err);
+      return res.status(500).json({
+        success: false,
+        message: 'Terjadi kesalahan pada server',
+      });
+    }
+  },
+ 
 };
 
 module.exports = IjazahController;

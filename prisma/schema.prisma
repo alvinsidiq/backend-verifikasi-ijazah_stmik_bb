@@ -90,6 +90,27 @@ model Ijazah {
 
   createdAt      DateTime        @default(now())
   updatedAt      DateTime        @updatedAt
+
+   // 🔗 relasi ke BlockchainRecord (optional, 1-1)
+  blockchainRecord BlockchainRecord?
+}
+
+
+model BlockchainRecord {
+  id             Int           @id @default(autoincrement())
+  ijazahId       Int           @unique
+  ijazah         Ijazah        @relation(fields: [ijazahId], references: [id])
+
+  ijazahHash     String
+  contractAddress String?
+  network        String
+  txHash         String?
+  blockNumber    Int?
+  statusOnchain  StatusOnchain @default(DUMMY)
+  explorerUrl    String?
+
+  createdAt      DateTime      @default(now())
+  updatedAt      DateTime      @updatedAt
 }
 
 
@@ -100,4 +121,10 @@ enum StatusValidasi {
   DITOLAK
 }
 
+enum StatusOnchain {
+  DUMMY
+  PENDING
+  SUCCESS
+  FAILED
+}
 
