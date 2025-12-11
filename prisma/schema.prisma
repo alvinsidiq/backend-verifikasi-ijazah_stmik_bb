@@ -93,6 +93,8 @@ model Ijazah {
 
    // 🔗 relasi ke BlockchainRecord (optional, 1-1)
   blockchainRecord BlockchainRecord?
+
+  verificationLogs VerificationLog[]
 }
 
 
@@ -101,7 +103,7 @@ model BlockchainRecord {
   ijazahId       Int           @unique
   ijazah         Ijazah        @relation(fields: [ijazahId], references: [id])
 
-  ijazahHash     String
+  ijazahHash     String        @unique
   contractAddress String?
   network        String
   txHash         String?
@@ -128,3 +130,20 @@ enum StatusOnchain {
   FAILED
 }
 
+enum VerifierType {
+  MAHASISWA
+  PERUSAHAAN
+  ADMIN
+  SYSTEM
+}
+
+
+model VerificationLog {
+  id           Int          @id @default(autoincrement())
+  ijazahId     Int
+  ijazah       Ijazah       @relation(fields: [ijazahId], references: [id])
+
+  verifierType VerifierType
+  verifierInfo String?      // misal: nama perusahaan / IP address / catatan
+  verifiedAt   DateTime     @default(now())
+}
