@@ -10,6 +10,16 @@ const router = express.Router();
 // Semua route mahasiswa butuh login
 router.use(authMiddleware);
 
+
+// MAHASISWA: lihat data dirinya sendiri
+// PENTING: letakkan sebelum '/:id' agar tidak tertangkap sebagai param id
+router.get(
+  '/me',
+  roleMiddleware(['MAHASISWA']),
+  MahasiswaController.me
+);  
+
+
 // ADMIN & VALIDATOR: bisa lihat list dan detail
 router.get(
   '/',
@@ -41,14 +51,6 @@ router.delete(
   roleMiddleware(['ADMIN']),
   MahasiswaController.remove
 );
-
-// MAHASISWA: lihat data dirinya sendiri
-router.get(
-  '/me',
-  roleMiddleware(['MAHASISWA']),
-  MahasiswaController.me
-);  
-
 
 
 module.exports = router; 

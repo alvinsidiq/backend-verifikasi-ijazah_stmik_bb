@@ -8,7 +8,8 @@
     "dev": "nodemon src/server.js",
     "start": "node src/server.js",
     "prisma:migrate": "prisma migrate dev",
-    "prisma:studio": "prisma studio"
+    "prisma:studio": "prisma studio",
+    "seed:ijazah-dummy": "node scripts/seed-ijazah-dummy.js"
   },
   "keywords": [],
   "author": "",
