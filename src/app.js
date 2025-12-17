@@ -15,6 +15,13 @@ const authRoutes = require('./routes/auth.routes');
 
 const app = express();
 
+// Disable HTTP caching/ETag so API responses always return the body (avoid 304)
+app.set('etag', false);
+app.use((req, res, next) => {
+  res.set('Cache-Control', 'no-store');
+  next();
+});
+
 
 // middleware dasar
 app.use(cors());
