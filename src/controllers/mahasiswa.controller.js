@@ -1,5 +1,6 @@
 // src/controllers/mahasiswa.controller.js
 const prisma = require('../config/prisma');
+const bcrypt = require('bcryptjs');
 
 
 const MahasiswaController = {
@@ -74,8 +75,11 @@ const MahasiswaController = {
   // POST /mahasiswa  (ADMIN)
   async create(req, res) {
     try {
-      const {
-        userId,
+      console.log("BODY CREATE /mahasiswa:", req.body);
+
+      let {
+        email,       // 👈 wajib: untuk akun user
+        password,    // 👈 wajib: password awal akun
         nim,
         nama,
         prodiId,
@@ -85,81 +89,106 @@ const MahasiswaController = {
         tanggalLahir,
       } = req.body;
 
-      if (!userId || !nim || !nama || !prodiId || !tahunMasuk) {
+      prodiId = prodiId ? Number(prodiId) : null;
+      tahunMasuk = tahunMasuk ? Number(tahunMasuk) : null;
+      tahunLulus = tahunLulus ? Number(tahunLulus) : null;
+
+      // ✅ VALIDASI WAJIB
+      if (!email || !password || !nim || !nama || !prodiId || !tahunMasuk) {
         return res.status(400).json({
           success: false,
-          message: 'userId, nim, nama, prodiId, dan tahunMasuk wajib diisi',
+          message:
+            "email, password, nim, nama, prodiId, dan tahunMasuk wajib diisi",
         });
       }
 
-      // Pastikan user ada dan rolenya MAHASISWA
-      const user = await prisma.user.findUnique({
-        where: { id: Number(userId) },
+      // 🔍 Cek: email sudah dipakai user lain?
+      const existingUser = await prisma.user.findUnique({
+        where: { email },
       });
 
-      if (!user) {
-        return res.status(404).json({
-          success: false,
-          message: 'User tidak ditemukan',
-        });
-      }
-
-      if (user.role !== 'MAHASISWA') {
+      if (existingUser) {
         return res.status(400).json({
           success: false,
-          message: 'Role user harus MAHASISWA untuk dibuatkan data mahasiswa',
+          message:
+            "Email sudah digunakan oleh user lain. Gunakan email lain untuk akun mahasiswa ini.",
         });
       }
 
-      // Cek apakah user sudah punya data mahasiswa
-      const existingMahasiswaByUser = await prisma.mahasiswa.findUnique({
-        where: { userId: Number(userId) },
-      });
+      // 🔐 Hash password (samakan dengan di auth.controller)
+      const hashedPassword = await bcrypt.hash(password, 10);
 
-      if (existingMahasiswaByUser) {
-        return res.status(409).json({
-          success: false,
-          message: 'User ini sudah memiliki data mahasiswa',
-        });
-      }
-
-      // Buat mahasiswa
-      const newMahasiswa = await prisma.mahasiswa.create({
+      // 👤 Buat akun user MAHASISWA
+      const user = await prisma.user.create({
         data: {
-          userId: Number(userId),
+          name: nama,
+          email,
+          passwordHash: hashedPassword,
+          role: "MAHASISWA",
+        },
+      });
+
+      // 🔁 Cek (opsional, mestinya belum ada): apakah user ini sudah punya mahasiswa?
+      const existingMahasiswa = await prisma.mahasiswa.findUnique({
+        where: { userId: user.id },
+      });
+
+      if (existingMahasiswa) {
+        return res.status(400).json({
+          success: false,
+          message:
+            "Mahasiswa untuk user ini sudah terdaftar. (Ini seharusnya jarang terjadi)",
+        });
+      }
+
+      console.log("FINAL USER ID (baru dibuat):", user.id);
+
+      // 🎓 Buat data Mahasiswa
+      const mahasiswa = await prisma.mahasiswa.create({
+        data: {
+          userId: user.id,
           nim,
           nama,
-          prodiId: Number(prodiId),
-          tahunMasuk: Number(tahunMasuk),
-          tahunLulus: tahunLulus ? Number(tahunLulus) : null,
+          prodiId,
+          tahunMasuk,
+          tahunLulus: tahunLulus || null,
           tempatLahir: tempatLahir || null,
           tanggalLahir: tanggalLahir ? new Date(tanggalLahir) : null,
         },
         include: {
-          user: true,
           prodi: true,
         },
       });
 
       return res.status(201).json({
         success: true,
-        message: 'Data mahasiswa berhasil dibuat',
-        data: newMahasiswa,
+        message:
+          "Akun user MAHASISWA dan data mahasiswa berhasil dibuat.",
+        data: mahasiswa,
       });
-    } catch (err) {
-      console.error('Error create mahasiswa:', err);
+    } catch (error) {
+      console.error("Error create mahasiswa:", error);
 
-      if (err.code === 'P2002') {
-        // unique constraint (nim atau userId)
-        return res.status(409).json({
+      if (error.code === "P2002") {
+        // unique constraint (misal NIM sudah dipakai)
+        return res.status(400).json({
           success: false,
-          message: 'NIM atau userId sudah digunakan',
+          message:
+            "Data mahasiswa melanggar unique constraint (misalnya NIM sudah dipakai).",
+        });
+      }
+
+      if (error.code === "P2003" && error.meta?.field_name?.includes("userId")) {
+        return res.status(400).json({
+          success: false,
+          message:
+            "Gagal membuat data mahasiswa karena userId tidak valid.",
         });
       }
 
       return res.status(500).json({
         success: false,
-        message: 'Terjadi kesalahan pada server',
+        message: "Terjadi kesalahan saat membuat data mahasiswa",
       });
     }
   },

@@ -9,7 +9,8 @@
     "start": "node src/server.js",
     "prisma:migrate": "prisma migrate dev",
     "prisma:studio": "prisma studio",
-    "seed:ijazah-dummy": "node scripts/seed-ijazah-dummy.js"
+    "seed:ijazah-dummy": "node scripts/seed-ijazah-dummy.js",
+    "seed:mahasiswa-users": "node scripts/seed-mahasiswa-users.js"
   },
   "keywords": [],
   "author": "",
