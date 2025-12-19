@@ -6,6 +6,7 @@ const programStudiRoutes = require('./routes/programStudi.routes');
 const mahasiswaRoutes = require('./routes/mahasiswa.routes');
 const ijazahRoutes = require('./routes/ijazah.routes');
 const verifikasiRoutes = require('./routes/verifikasi.routes');
+const validatorRoutes = require('./routes/validator.routes');
 
 
 require('dotenv').config();
@@ -50,6 +51,9 @@ app.use('/mahasiswa', mahasiswaRoutes);
 
 // route ijazah
 app.use('/ijazah', ijazahRoutes);
+
+// route validator
+app.use('/validator', validatorRoutes);
 
 
 // route verifikasi publik

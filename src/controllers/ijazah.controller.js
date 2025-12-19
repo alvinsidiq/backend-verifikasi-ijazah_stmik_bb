@@ -8,6 +8,84 @@ const STATUS = {
   DITOLAK: 'DITOLAK',
 };
 
+async function handleValidasiUpdate(req, res) {
+  try {
+    const id = parseInt(req.params.id, 10);
+    let { statusValidasi, status, catatan } = req.body;
+
+    if (isNaN(id)) {
+      return res.status(400).json({
+        success: false,
+        message: 'ID tidak valid',
+      });
+    }
+
+    const finalStatus = (statusValidasi || status || '').toString().toUpperCase();
+
+    if (!finalStatus) {
+      return res.status(400).json({
+        success: false,
+        message: 'statusValidasi wajib diisi',
+      });
+    }
+
+    if (![STATUS.TERVALIDASI, STATUS.DITOLAK].includes(finalStatus)) {
+      return res.status(400).json({
+        success: false,
+        message: `Status validasi harus ${STATUS.TERVALIDASI} atau ${STATUS.DITOLAK}`,
+      });
+    }
+
+    const ijazah = await prisma.ijazah.findUnique({
+      where: { id },
+    });
+
+    if (!ijazah) {
+      return res.status(404).json({
+        success: false,
+        message: 'Ijazah tidak ditemukan',
+      });
+    }
+
+    if (ijazah.statusValidasi !== STATUS.MENUNGGU) {
+      return res.status(400).json({
+        success: false,
+        message: `Ijazah dengan status ${ijazah.statusValidasi} tidak dapat divalidasi`,
+      });
+    }
+
+    const updated = await prisma.ijazah.update({
+      where: { id },
+      data: {
+        statusValidasi: finalStatus,
+        validatorId: req.user.userId,
+        catatanValidasi: catatan || null,
+        validatedAt: new Date(),
+      },
+      include: {
+        mahasiswa: {
+          include: {
+            prodi: true,
+          },
+        },
+        validator: true,
+      },
+    });
+
+    return res.json({
+      success: true,
+      message: `Ijazah berhasil diupdate ke status ${finalStatus}`,
+      data: updated,
+    });
+  } catch (err) {
+    console.error('Error validasi ijazah:', err);
+    return res.status(500).json({
+      success: false,
+      message: 'Terjadi kesalahan pada server',
+    });
+  }
+}
+
 
 const IjazahController = {
   // GET /ijazah?status=MENUNGGU&nim=201801234
@@ -239,6 +317,39 @@ const IjazahController = {
     }
   },
 
+  // GET /ijazah/validasi/pending  (VALIDATOR)
+  async getPendingForValidator(req, res) {
+    try {
+      const ijazahList = await prisma.ijazah.findMany({
+        where: { statusValidasi: STATUS.MENUNGGU },
+        include: {
+          mahasiswa: {
+            include: {
+              prodi: true,
+            },
+          },
+          validator: true,
+          blockchainRecord: true,
+        },
+        orderBy: {
+          createdAt: 'desc',
+        },
+      });
+
+      return res.json({
+        success: true,
+        message: 'Berhasil mengambil ijazah yang menunggu validasi',
+        data: ijazahList,
+      });
+    } catch (err) {
+      console.error('Error getPendingForValidator:', err);
+      return res.status(500).json({
+        success: false,
+        message: 'Gagal memuat daftar ijazah untuk divalidasi',
+      });
+    }
+  },
+
    // POST /ijazah/:id/kirim-validasi  (ADMIN) - ubah status ke MENUNGGU
   async kirimValidasi(req, res) {
     try {
@@ -297,77 +408,17 @@ const IjazahController = {
         success: false,
         message: 'Terjadi kesalahan pada server',
       });
-    }
+   }
   },
 
    // POST /ijazah/:id/validasi  (VALIDATOR/ADMIN)
   async validasi(req, res) {
-    try {
-      const id = parseInt(req.params.id, 10);
-      const { status, catatan } = req.body;
+    return handleValidasiUpdate(req, res);
+  },
 
-      if (isNaN(id)) {
-        return res.status(400).json({
-          success: false,
-          message: 'ID tidak valid',
-        });
-      }
-
-      if (![STATUS.TERVALIDASI, STATUS.DITOLAK].includes(status)) {
-        return res.status(400).json({
-          success: false,
-          message: `Status validasi harus ${STATUS.TERVALIDASI} atau ${STATUS.DITOLAK}`,
-        });
-      }
-
-      const ijazah = await prisma.ijazah.findUnique({
-        where: { id },
-      });
-
-      if (!ijazah) {
-        return res.status(404).json({
-          success: false,
-          message: 'Ijazah tidak ditemukan',
-        });
-      }
-
-      if (ijazah.statusValidasi !== STATUS.MENUNGGU) {
-        return res.status(400).json({
-          success: false,
-          message: `Ijazah dengan status ${ijazah.statusValidasi} tidak dapat divalidasi`,
-        });
-      }
-
-      const updated = await prisma.ijazah.update({
-        where: { id },
-        data: {
-          statusValidasi: status,
-          validatorId: req.user.userId,
-          catatanValidasi: catatan || null,
-          validatedAt: new Date(),
-        },
-        include: {
-          mahasiswa: {
-            include: {
-              prodi: true,
-            },
-          },
-          validator: true,
-        },
-      });
-
-      return res.json({
-        success: true,
-        message: `Ijazah berhasil diupdate ke status ${status}`,
-        data: updated,
-      });
-    } catch (err) {
-      console.error('Error validasi ijazah:', err);
-      return res.status(500).json({
-        success: false,
-        message: 'Terjadi kesalahan pada server',
-      });
-    }
+  // PUT /ijazah/:id/validasi  (VALIDATOR)
+  async updateValidasi(req, res) {
+    return handleValidasiUpdate(req, res);
   },
 
   // GET /ijazah/me  (MAHASISWA) - lihat ijazah miliknya sendiri
