@@ -16,6 +16,13 @@ router.get(
   IjazahController.listForMahasiswa
 );
 
+// VALIDATOR: lihat ijazah yang menunggu validasi
+router.get(
+  '/validasi/pending',
+  roleMiddleware(['VALIDATOR']),
+  IjazahController.getPendingForValidator
+);
+
 // ADMIN & VALIDATOR: list dan detail
 router.get(
   '/',
@@ -53,6 +60,12 @@ router.post(
   '/:id/validasi',
   roleMiddleware(['VALIDATOR', 'ADMIN']),
   IjazahController.validasi
+);
+
+router.put(
+  '/:id/validasi',
+  roleMiddleware(['VALIDATOR']),
+  IjazahController.updateValidasi
 );
 
 // VALIDATOR & ADMIN: mint dummy ke "blockchain"
