@@ -118,6 +118,7 @@ const IjazahController = {
             },
           },
           validator: true,
+          blockchainRecord: true,
         },
         orderBy: {
           createdAt: 'desc',
@@ -158,6 +159,7 @@ const IjazahController = {
             },
           },
           validator: true,
+          blockchainRecord: true,
         },
       });
 
