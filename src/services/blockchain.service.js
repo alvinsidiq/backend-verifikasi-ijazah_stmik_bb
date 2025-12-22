@@ -1,5 +1,11 @@
 // src/services/blockchain.service.js
 const crypto = require('crypto');
+const { ethers } = require("ethers");
+const prisma = require("../config/prisma");
+const { ijazahRegistryContract } = require("../config/blockchain");
+
+const NETWORK_NAME =
+  process.env.BLOCKCHAIN_NETWORK_NAME || "LOCALHARDHAT";
 
 /**
  * Generate hash ijazah berbasis data penting ijazah + mahasiswa.
@@ -56,7 +62,145 @@ function storeIjazahDummy(ijazahHash, ijazahId) {
   };
 }
 
+/**
+ * Hitung hash ijazah (bytes32) dari data penting ijazah.
+ * Kalau di DB sudah ada ijazahHash, pakai itu saja.
+ */
+function computeIjazahHash(ijazah) {
+  if (ijazah.ijazahHash) {
+    return ijazah.ijazahHash;
+  }
+
+  const nomorIjazah = ijazah.nomorIjazah || "";
+  const nim = ijazah.mahasiswa?.nim || "";
+  const nama = ijazah.mahasiswa?.nama || "";
+  const tglLulus = ijazah.tanggalLulus
+    ? new Date(ijazah.tanggalLulus).toISOString().slice(0, 10)
+    : "";
+
+  const hash = ethers.keccak256(
+    ethers.toUtf8Bytes(`${nomorIjazah}::${nim}::${nama}::${tglLulus}`)
+  );
+
+  return hash; // bentuk "0x...."
+}
+
+/**
+ * Publish ijazah ke blockchain:
+ * 1. Hitung / ambil ijazahHash
+ * 2. Panggil kontrak registerIjazah(hash)
+ * 3. Simpan / update BlockchainRecord di DB
+ */
+async function publishIjazahToBlockchain(ijazahId) {
+  if (!ijazahRegistryContract) {
+    throw new Error(
+      "Kontrak IjazahRegistry belum terkonfigurasi (cek .env dan config/blockchain.js)"
+    );
+  }
+
+  // Ambil ijazah + relasi yang diperlukan
+  const ijazah = await prisma.ijazah.findUnique({
+    where: { id: Number(ijazahId) },
+    include: {
+      mahasiswa: {
+        include: {
+          prodi: true,
+        },
+      },
+      blockchainRecord: true,
+    },
+  });
+
+  if (!ijazah) {
+    throw new Error("Ijazah tidak ditemukan");
+  }
+
+  // Kalau sudah pernah di-SUCCESS-kan, tidak usah kirim lagi
+  if (
+    ijazah.blockchainRecord &&
+    ijazah.blockchainRecord.statusOnchain === "SUCCESS"
+  ) {
+    return {
+      alreadyOnchain: true,
+      ijazahHash: ijazah.blockchainRecord.ijazahHash,
+      txHash: ijazah.blockchainRecord.txHash,
+      blockNumber: ijazah.blockchainRecord.blockNumber,
+    };
+  }
+
+  // Hitung hash
+  const ijazahHash = computeIjazahHash(ijazah);
+
+  console.log("[BLOCKCHAIN] registerIjazah hash:", ijazahHash);
+
+  // Panggil kontrak
+  let tx;
+  try {
+    tx = await ijazahRegistryContract.registerIjazah(ijazahHash);
+  } catch (err) {
+    console.error(
+      "[BLOCKCHAIN] Error saat memanggil registerIjazah:",
+      err
+    );
+    throw new Error(
+      "Gagal mengirim transaksi ke blockchain. Detail: " +
+        (err.reason || err.message)
+    );
+  }
+
+  console.log("[BLOCKCHAIN] Tx sent:", tx.hash);
+
+  // Simpan dulu record dengan status PENDING
+  let bcRecord = await prisma.blockchainRecord.upsert({
+    where: {
+      ijazahId: ijazah.id,
+    },
+    update: {
+      ijazahHash,
+      contractAddress: ijazahRegistryContract.target,
+      network: NETWORK_NAME,
+      txHash: tx.hash,
+      statusOnchain: "PENDING",
+    },
+    create: {
+      ijazahId: ijazah.id,
+      ijazahHash,
+      contractAddress: ijazahRegistryContract.target,
+      network: NETWORK_NAME,
+      txHash: tx.hash,
+      statusOnchain: "PENDING",
+    },
+  });
+
+  // Tunggu transaksi di-mining
+  const receipt = await tx.wait();
+
+  console.log(
+    "[BLOCKCHAIN] Tx confirmed, block:",
+    receipt.blockNumber
+  );
+
+  // Update status menjadi SUCCESS
+  bcRecord = await prisma.blockchainRecord.update({
+    where: { id: bcRecord.id },
+    data: {
+      blockNumber: receipt.blockNumber,
+      statusOnchain: "SUCCESS",
+    },
+  });
+
+  return {
+    alreadyOnchain: false,
+    ijazahHash,
+    txHash: bcRecord.txHash,
+    blockNumber: bcRecord.blockNumber,
+    network: bcRecord.network,
+  };
+}
+
 module.exports = {
   generateIjazahHash,
   storeIjazahDummy,
+  computeIjazahHash,
+  publishIjazahToBlockchain,
 };
