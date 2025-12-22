@@ -1,6 +1,10 @@
 // src/controllers/ijazah.controller.js
 const prisma = require('../config/prisma');
-const blockchainService = require('../services/blockchain.service');
+const {
+  generateIjazahHash,
+  storeIjazahDummy,
+  publishIjazahToBlockchain,
+} = require('../services/blockchain.service');
 const STATUS = {
   DRAFT: 'DRAFT',
   MENUNGGU: 'MENUNGGU',
@@ -516,13 +520,10 @@ const IjazahController = {
       }
 
       // Generate hash ijazah dari data mahasiswa + prodi + ijazah
-      const ijazahHash = blockchainService.generateIjazahHash(
-        ijazah,
-        ijazah.mahasiswa
-      );
+      const ijazahHash = generateIjazahHash(ijazah, ijazah.mahasiswa);
 
       // Dummy kirim ke "blockchain"
-      const bcResult = blockchainService.storeIjazahDummy(ijazahHash, ijazah.id);
+      const bcResult = storeIjazahDummy(ijazahHash, ijazah.id);
 
       // Simpan ke tabel BlockchainRecord
       const blockchainRecord = await prisma.blockchainRecord.create({
@@ -561,6 +562,44 @@ const IjazahController = {
     }
   },
  
+  async publishOnchain(req, res) {
+    try {
+      const { id } = req.params;
+
+      if (!id) {
+        return res.status(400).json({
+          success: false,
+          message: "Parameter id ijazah wajib diisi",
+        });
+      }
+
+      const result = await publishIjazahToBlockchain(id);
+
+      if (result.alreadyOnchain) {
+        return res.status(200).json({
+          success: true,
+          message:
+            "Ijazah sudah pernah tercatat di blockchain sebelumnya",
+          data: result,
+        });
+      }
+
+      return res.status(200).json({
+        success: true,
+        message:
+          "Ijazah berhasil dipublish ke blockchain dan disimpan di BlockchainRecord",
+        data: result,
+      });
+    } catch (error) {
+      console.error("Error publishOnchain Ijazah:", error);
+      return res.status(500).json({
+        success: false,
+        message:
+          error.message ||
+          "Terjadi kesalahan saat mempublish ijazah ke blockchain",
+      });
+    }
+  },
 };
 
 module.exports = IjazahController;

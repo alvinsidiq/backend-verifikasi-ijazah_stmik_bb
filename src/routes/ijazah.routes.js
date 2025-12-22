@@ -68,6 +68,13 @@ router.put(
   IjazahController.updateValidasi
 );
 
+// Admin publish ijazah ke blockchain
+router.post(
+  '/:id/publish-onchain',
+  roleMiddleware(['ADMIN']),
+  IjazahController.publishOnchain
+);
+
 // VALIDATOR & ADMIN: mint dummy ke "blockchain"
 router.post(
   '/:id/mint',
