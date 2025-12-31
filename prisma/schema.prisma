@@ -65,6 +65,12 @@ model Mahasiswa {
   tempatLahir  String?
   tanggalLahir DateTime?
 
+  alamat       String?
+  email        String?
+  noTelepon    String?
+  foto         String?
+  status       String?
+
   createdAt    DateTime     @default(now())
   updatedAt    DateTime     @updatedAt
 
@@ -78,9 +84,11 @@ model Ijazah {
 
   nomorIjazah    String          @unique
   tanggalLulus   DateTime
+  ipk            Float?
+  judulTa        String?
   fileUrl        String?
 
-  statusValidasi StatusValidasi  @default(DRAFT)
+  statusValidasi String         @default("DRAFT")
 
   validatorId    Int?
   validator      User?           @relation("IjazahValidator", fields: [validatorId], references: [id])
@@ -115,13 +123,6 @@ model BlockchainRecord {
   updatedAt      DateTime      @updatedAt
 }
 
-
-enum StatusValidasi {
-  DRAFT
-  MENUNGGU
-  TERVALIDASI
-  DITOLAK
-}
 
 enum StatusOnchain {
   DUMMY

@@ -1,0 +1,3 @@
+-- AlterTable
+ALTER TABLE `Ijazah` ADD COLUMN `ipk` DOUBLE NULL,
+    ADD COLUMN `judulTa` VARCHAR(191) NULL;

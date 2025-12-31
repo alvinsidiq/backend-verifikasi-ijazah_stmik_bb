@@ -1,16 +1,104 @@
 // src/controllers/ijazah.controller.js
+const fs = require('fs');
+const path = require('path');
+const dayjs = require('dayjs');
+require('dayjs/locale/id');
+const QRCode = require('qrcode');
+const { PDFDocument, StandardFonts, rgb } = require('pdf-lib');
 const prisma = require('../config/prisma');
 const {
   generateIjazahHash,
   storeIjazahDummy,
   publishIjazahToBlockchain,
+  computeIjazahHash,
 } = require('../services/blockchain.service');
-const STATUS = {
+const STATUS_VALIDASI = {
   DRAFT: 'DRAFT',
-  MENUNGGU: 'MENUNGGU',
+  APPROVED_ADMIN: 'APPROVED_ADMIN',
   TERVALIDASI: 'TERVALIDASI',
-  DITOLAK: 'DITOLAK',
+  DITOLAK_ADMIN: 'DITOLAK_ADMIN',
+  DITOLAK_VALIDATOR: 'DITOLAK_VALIDATOR',
 };
+
+dayjs.locale('id');
+
+const DEFAULT_TEMPLATE_PATH =
+  process.env.IJAZAH_TEMPLATE_PATH ||
+  path.join(__dirname, '..', '..', 'assets', 'templates', 'ijazah-template.pdf');
+
+const CAMPUS_NAME = process.env.CAMPUS_NAME || 'STMIK Bandung Bali';
+const DEFAULT_FAKULTAS =
+  process.env.CAMPUS_FAKULTAS_NAME || 'Fakultas Teknik';
+
+function buildVerificationUrl(hash) {
+  const base =
+    (process.env.VERIFICATION_PUBLIC_BASE_URL ||
+      'http://localhost:3000/verifikasi').trim();
+
+  if (!hash) {
+    return base;
+  }
+
+  if (base.includes('{hash}')) {
+    return base.replace('{hash}', encodeURIComponent(hash));
+  }
+
+  if (/[?&]hash=/.test(base)) {
+    if (base.trim().endsWith('hash=')) {
+      return `${base}${encodeURIComponent(hash)}`;
+    }
+    return base;
+  }
+
+  if (base.includes('?')) {
+    const separator = base.endsWith('?') || base.endsWith('&') ? '' : '&';
+    return `${base}${separator}hash=${encodeURIComponent(hash)}`;
+  }
+
+  return `${base.replace(/\/$/, '')}/${encodeURIComponent(hash)}`;
+}
+
+function derivePredikat(ipk) {
+  if (ipk === null || ipk === undefined) return '-';
+  const num = Number(ipk);
+  if (!Number.isFinite(num)) return '-';
+  if (num >= 3.51) return 'Dengan Pujian';
+  if (num >= 3.01) return 'Sangat Memuaskan';
+  if (num >= 2.76) return 'Memuaskan';
+  return 'Lulus';
+}
+
+function withJudulTa(data) {
+  if (!data) return data;
+  if (Array.isArray(data)) return data.map(withJudulTa);
+
+  // sisipkan alias judul_ta agar konsisten dengan kebutuhan frontend
+  return {
+    ...data,
+    judul_ta:
+      data.judul_ta !== undefined
+        ? data.judul_ta
+        : data.judulTa !== undefined
+          ? data.judulTa
+          : null,
+  };
+}
+
+function getJudulTaFromBody(body = {}) {
+  const candidates = [
+    body.judulTa,
+    body.judul_ta,
+    body.judulTA,
+    body.judul_tugas_akhir,
+    body.judulTugasAkhir,
+  ];
+
+  for (const val of candidates) {
+    if (val !== undefined) return val;
+  }
+
+  return undefined;
+}
 
 async function handleValidasiUpdate(req, res) {
   try {
@@ -25,7 +113,6 @@ async function handleValidasiUpdate(req, res) {
     }
 
     const finalStatus = (statusValidasi || status || '').toString().toUpperCase();
-
     if (!finalStatus) {
       return res.status(400).json({
         success: false,
@@ -33,10 +120,10 @@ async function handleValidasiUpdate(req, res) {
       });
     }
 
-    if (![STATUS.TERVALIDASI, STATUS.DITOLAK].includes(finalStatus)) {
+    if (![STATUS_VALIDASI.TERVALIDASI, STATUS_VALIDASI.DITOLAK_VALIDATOR].includes(finalStatus)) {
       return res.status(400).json({
         success: false,
-        message: `Status validasi harus ${STATUS.TERVALIDASI} atau ${STATUS.DITOLAK}`,
+        message: `Status validasi harus ${STATUS_VALIDASI.TERVALIDASI} atau ${STATUS_VALIDASI.DITOLAK_VALIDATOR}`,
       });
     }
 
@@ -51,18 +138,20 @@ async function handleValidasiUpdate(req, res) {
       });
     }
 
-    if (ijazah.statusValidasi !== STATUS.MENUNGGU) {
+    if (ijazah.statusValidasi !== STATUS_VALIDASI.APPROVED_ADMIN) {
       return res.status(400).json({
         success: false,
         message: `Ijazah dengan status ${ijazah.statusValidasi} tidak dapat divalidasi`,
       });
     }
 
+    const validatorId = req.user?.userId ? Number(req.user.userId) : null;
+
     const updated = await prisma.ijazah.update({
       where: { id },
       data: {
         statusValidasi: finalStatus,
-        validatorId: req.user.userId,
+        validatorId,
         catatanValidasi: catatan || null,
         validatedAt: new Date(),
       },
@@ -79,7 +168,7 @@ async function handleValidasiUpdate(req, res) {
     return res.json({
       success: true,
       message: `Ijazah berhasil diupdate ke status ${finalStatus}`,
-      data: updated,
+      data: withJudulTa(updated),
     });
   } catch (err) {
     console.error('Error validasi ijazah:', err);
@@ -92,7 +181,7 @@ async function handleValidasiUpdate(req, res) {
 
 
 const IjazahController = {
-  // GET /ijazah?status=MENUNGGU&nim=201801234
+  // GET /ijazah?status=APPROVED_ADMIN&nim=201801234
   async list(req, res) {
     try {
       const { status, nim } = req.query;
@@ -127,7 +216,7 @@ const IjazahController = {
 
       return res.json({
         success: true,
-        data: ijazahList,
+        data: withJudulTa(ijazahList),
       });
     } catch (err) {
       console.error('Error list ijazah:', err);
@@ -172,7 +261,7 @@ const IjazahController = {
 
       return res.json({
         success: true,
-        data: ijazah,
+        data: withJudulTa(ijazah),
       });
     } catch (err) {
       console.error('Error detail ijazah:', err);
@@ -190,8 +279,10 @@ const IjazahController = {
         mahasiswaId,
         nomorIjazah,
         tanggalLulus,
+        ipk,
         fileUrl,
       } = req.body;
+      const judulTaInput = getJudulTaFromBody(req.body);
 
       if (!mahasiswaId || !nomorIjazah || !tanggalLulus) {
         return res.status(400).json({
@@ -212,13 +303,28 @@ const IjazahController = {
         });
       }
 
+      const parsedIpk =
+        ipk !== undefined && ipk !== ''
+          ? Number.parseFloat(ipk)
+          : null;
+
+      const sanitizedIpk = Number.isFinite(parsedIpk) ? parsedIpk : null;
+      const finalStatus = STATUS_VALIDASI.DRAFT;
+
       const newIjazah = await prisma.ijazah.create({
         data: {
           mahasiswaId: Number(mahasiswaId),
           nomorIjazah,
           tanggalLulus: new Date(tanggalLulus),
+          ipk: sanitizedIpk,
+          judulTa:
+            judulTaInput === undefined
+              ? null
+              : judulTaInput === ''
+                ? null
+                : judulTaInput,
           fileUrl: fileUrl || null,
-          statusValidasi: STATUS.DRAFT,
+          statusValidasi: finalStatus,
         },
         include: {
           mahasiswa: {
@@ -232,7 +338,7 @@ const IjazahController = {
       return res.status(201).json({
         success: true,
         message: 'Ijazah berhasil dibuat (status DRAFT)',
-        data: newIjazah,
+        data: withJudulTa(newIjazah),
       });
     } catch (err) {
       console.error('Error create ijazah:', err);
@@ -275,22 +381,40 @@ const IjazahController = {
       }
 
       const {
+        mahasiswaId,
         nomorIjazah,
         tanggalLulus,
+        ipk,
         fileUrl,
       } = req.body;
+      const judulTaInput = getJudulTaFromBody(req.body);
+
+      const data = {};
+
+      if (mahasiswaId) data.mahasiswaId = Number(mahasiswaId);
+      if (nomorIjazah) data.nomorIjazah = nomorIjazah;
+      if (tanggalLulus) data.tanggalLulus = new Date(tanggalLulus);
+
+      if (judulTaInput !== undefined) {
+        data.judulTa = judulTaInput === '' ? null : judulTaInput;
+      }
+
+      if (ipk !== undefined) {
+        const parsedIpk =
+          ipk === '' || ipk === null
+            ? null
+            : Number.parseFloat(ipk);
+
+        data.ipk = Number.isFinite(parsedIpk) ? parsedIpk : null;
+      }
+
+      if (fileUrl !== undefined) {
+        data.fileUrl = fileUrl || null;
+      }
 
       const updated = await prisma.ijazah.update({
         where: { id },
-        data: {
-          nomorIjazah: nomorIjazah ?? existing.nomorIjazah,
-          tanggalLulus: tanggalLulus
-            ? new Date(tanggalLulus)
-            : existing.tanggalLulus,
-          fileUrl: fileUrl !== undefined
-            ? (fileUrl || null)
-            : existing.fileUrl,
-        },
+        data,
         include: {
           mahasiswa: {
             include: {
@@ -304,7 +428,7 @@ const IjazahController = {
       return res.json({
         success: true,
         message: 'Ijazah berhasil diperbarui',
-        data: updated,
+        data: withJudulTa(updated),
       });
     } catch (err) {
       console.error('Error update ijazah:', err);
@@ -327,7 +451,7 @@ const IjazahController = {
   async getPendingForValidator(req, res) {
     try {
       const ijazahList = await prisma.ijazah.findMany({
-        where: { statusValidasi: STATUS.MENUNGGU },
+        where: { statusValidasi: STATUS_VALIDASI.APPROVED_ADMIN },
         include: {
           mahasiswa: {
             include: {
@@ -345,7 +469,7 @@ const IjazahController = {
       return res.json({
         success: true,
         message: 'Berhasil mengambil ijazah yang menunggu validasi',
-        data: ijazahList,
+        data: withJudulTa(ijazahList),
       });
     } catch (err) {
       console.error('Error getPendingForValidator:', err);
@@ -356,7 +480,7 @@ const IjazahController = {
     }
   },
 
-   // POST /ijazah/:id/kirim-validasi  (ADMIN) - ubah status ke MENUNGGU
+   // POST /ijazah/:id/kirim-validasi  (ADMIN) - reset ke DRAFT untuk validasi ulang
   async kirimValidasi(req, res) {
     try {
       const id = parseInt(req.params.id, 10);
@@ -379,17 +503,23 @@ const IjazahController = {
         });
       }
 
-      if (ijazah.statusValidasi !== STATUS.DRAFT && ijazah.statusValidasi !== STATUS.DITOLAK) {
+      const allowedStatuses = [
+        STATUS_VALIDASI.DRAFT,
+        STATUS_VALIDASI.DITOLAK_ADMIN,
+        STATUS_VALIDASI.DITOLAK_VALIDATOR,
+      ];
+
+      if (!allowedStatuses.includes(ijazah.statusValidasi)) {
         return res.status(400).json({
           success: false,
-          message: `Ijazah dengan status ${ijazah.statusValidasi} tidak bisa dikirim untuk validasi`,
+          message: `Ijazah dengan status ${ijazah.statusValidasi} tidak bisa dikembalikan ke DRAFT`,
         });
       }
 
       const updated = await prisma.ijazah.update({
         where: { id },
         data: {
-          statusValidasi: STATUS.MENUNGGU,
+          statusValidasi: STATUS_VALIDASI.DRAFT,
           validatorId: null,
           catatanValidasi: null,
           validatedAt: null,
@@ -405,8 +535,8 @@ const IjazahController = {
 
       return res.json({
         success: true,
-        message: 'Ijazah berhasil dikirim untuk validasi (status MENUNGGU)',
-        data: updated,
+        message: 'Ijazah dikembalikan ke status DRAFT untuk validasi ulang',
+        data: withJudulTa(updated),
       });
     } catch (err) {
       console.error('Error kirimValidasi ijazah:', err);
@@ -415,6 +545,191 @@ const IjazahController = {
         message: 'Terjadi kesalahan pada server',
       });
    }
+  },
+
+  // Admin menyetujui ijazah -> lanjut ke validator
+  async approveByAdmin(req, res) {
+    try {
+      const { id } = req.params;
+      const { catatan } = req.body || {};
+
+      const ijazah = await prisma.ijazah.findUnique({
+        where: { id: Number(id) },
+      });
+
+      if (!ijazah) {
+        return res
+          .status(404)
+          .json({ success: false, message: 'Ijazah tidak ditemukan' });
+      }
+
+      if (ijazah.statusValidasi !== STATUS_VALIDASI.DRAFT) {
+        return res.status(400).json({
+          success: false,
+          message: 'Ijazah tidak berada pada status yang bisa divalidasi Admin (harus DRAFT).',
+        });
+      }
+
+      const updated = await prisma.ijazah.update({
+        where: { id: ijazah.id },
+        data: {
+          statusValidasi: STATUS_VALIDASI.APPROVED_ADMIN,
+          catatanValidasi: catatan || ijazah.catatanValidasi,
+        },
+      });
+
+      return res.json({
+        success: true,
+        message: 'Ijazah disetujui Admin (1/2). Menunggu validasi Validator.',
+        data: withJudulTa(updated),
+      });
+    } catch (err) {
+      console.error('Error approveByAdmin:', err);
+      return res.status(500).json({
+        success: false,
+        message: 'Gagal memproses validasi Admin',
+      });
+    }
+  },
+
+  // Admin menolak ijazah
+  async rejectByAdmin(req, res) {
+    try {
+      const { id } = req.params;
+      const { catatan } = req.body || {};
+
+      const ijazah = await prisma.ijazah.findUnique({
+        where: { id: Number(id) },
+      });
+
+      if (!ijazah) {
+        return res
+          .status(404)
+          .json({ success: false, message: 'Ijazah tidak ditemukan' });
+      }
+
+      const updated = await prisma.ijazah.update({
+        where: { id: ijazah.id },
+        data: {
+          statusValidasi: STATUS_VALIDASI.DITOLAK_ADMIN,
+          catatanValidasi: catatan || 'Ditolak oleh Admin',
+          validatorId: null,
+          validatedAt: null,
+        },
+      });
+
+      return res.json({
+        success: true,
+        message: 'Ijazah ditolak oleh Admin',
+        data: withJudulTa(updated),
+      });
+    } catch (err) {
+      console.error('Error rejectByAdmin:', err);
+      return res.status(500).json({
+        success: false,
+        message: 'Gagal memproses penolakan Admin',
+      });
+    }
+  },
+
+  // Validator menyetujui ijazah -> jadi TERVALIDASI
+  async approveByValidator(req, res) {
+    try {
+      const { id } = req.params;
+      const { catatan } = req.body || {};
+      const user = req.user;
+      const validatorId = user?.userId ? Number(user.userId) : null;
+
+      const ijazah = await prisma.ijazah.findUnique({
+        where: { id: Number(id) },
+      });
+
+      if (!ijazah) {
+        return res
+          .status(404)
+          .json({ success: false, message: 'Ijazah tidak ditemukan' });
+      }
+
+      if (ijazah.statusValidasi !== STATUS_VALIDASI.APPROVED_ADMIN) {
+        return res.status(400).json({
+          success: false,
+          message:
+            'Ijazah belum disetujui Admin atau sudah diproses Validator',
+        });
+      }
+
+      const updated = await prisma.ijazah.update({
+        where: { id: ijazah.id },
+        data: {
+          statusValidasi: STATUS_VALIDASI.TERVALIDASI,
+          validatorId,
+          validatedAt: new Date(),
+          catatanValidasi: catatan || ijazah.catatanValidasi,
+        },
+      });
+
+      return res.json({
+        success: true,
+        message: 'Ijazah dinyatakan TERVALIDASI oleh Validator',
+        data: withJudulTa(updated),
+      });
+    } catch (err) {
+      console.error('Error approveByValidator:', err);
+      return res.status(500).json({
+        success: false,
+        message: 'Gagal memproses validasi Validator',
+      });
+    }
+  },
+
+  // Validator menolak ijazah
+  async rejectByValidator(req, res) {
+    try {
+      const { id } = req.params;
+      const { catatan } = req.body || {};
+      const user = req.user;
+      const validatorId = user?.userId ? Number(user.userId) : null;
+
+      const ijazah = await prisma.ijazah.findUnique({
+        where: { id: Number(id) },
+      });
+
+      if (!ijazah) {
+        return res
+          .status(404)
+          .json({ success: false, message: 'Ijazah tidak ditemukan' });
+      }
+
+      if (ijazah.statusValidasi !== STATUS_VALIDASI.APPROVED_ADMIN) {
+        return res.status(400).json({
+          success: false,
+          message:
+            'Ijazah belum disetujui Admin atau sudah diproses Validator',
+        });
+      }
+
+      const updated = await prisma.ijazah.update({
+        where: { id: ijazah.id },
+        data: {
+          statusValidasi: STATUS_VALIDASI.DITOLAK_VALIDATOR,
+          validatorId,
+          validatedAt: new Date(),
+          catatanValidasi: catatan || 'Ditolak oleh Validator',
+        },
+      });
+
+      return res.json({
+        success: true,
+        message: 'Ijazah ditolak oleh Validator',
+        data: withJudulTa(updated),
+      });
+    } catch (err) {
+      console.error('Error rejectByValidator:', err);
+      return res.status(500).json({
+        success: false,
+        message: 'Gagal memproses penolakan Validator',
+      });
+    }
   },
 
    // POST /ijazah/:id/validasi  (VALIDATOR/ADMIN)
@@ -452,6 +767,7 @@ const IjazahController = {
             },
           },
           validator: true,
+          blockchainRecord: true,
         },
         orderBy: {
           createdAt: 'desc',
@@ -460,13 +776,246 @@ const IjazahController = {
 
       return res.json({
         success: true,
-        data: ijazahList,
+        data: withJudulTa(ijazahList),
       });
     } catch (err) {
       console.error('Error listForMahasiswa ijazah:', err);
       return res.status(500).json({
         success: false,
         message: 'Terjadi kesalahan pada server',
+      });
+    }
+  },
+
+  // GET /ijazah/:id/download  (ADMIN/VALIDATOR/MHS - tapi mhs hanya miliknya)
+  async downloadPdf(req, res) {
+    try {
+      const id = Number(req.params.id);
+
+      if (Number.isNaN(id)) {
+        return res.status(400).json({
+          success: false,
+          message: 'ID tidak valid',
+        });
+      }
+
+      const ijazah = await prisma.ijazah.findUnique({
+        where: { id },
+        include: {
+          mahasiswa: {
+            include: {
+              prodi: true,
+              user: true,
+            },
+          },
+          blockchainRecord: true,
+        },
+      });
+
+      if (!ijazah) {
+        return res.status(404).json({
+          success: false,
+          message: 'Ijazah tidak ditemukan',
+        });
+      }
+
+      // Mahasiswa hanya boleh unduh ijazah miliknya
+      if (
+        req.user?.role === 'MAHASISWA' &&
+        ijazah.mahasiswa?.userId !== Number(req.user.userId)
+      ) {
+        return res.status(403).json({
+          success: false,
+          message: 'Mahasiswa hanya dapat mengunduh ijazah miliknya sendiri',
+        });
+      }
+
+      const templatePath = process.env.IJAZAH_TEMPLATE_PATH || DEFAULT_TEMPLATE_PATH;
+
+      if (!fs.existsSync(templatePath)) {
+        return res.status(500).json({
+          success: false,
+          message: `Template ijazah tidak ditemukan di ${templatePath}. Upload file background di lokasi tersebut atau set IJAZAH_TEMPLATE_PATH.`,
+        });
+      }
+
+      const templateBytes = fs.readFileSync(templatePath);
+      const pdfDoc = await PDFDocument.load(templateBytes);
+      const [page] = pdfDoc.getPages();
+      const fontRegular = await pdfDoc.embedFont(StandardFonts.Helvetica);
+      const fontBold = await pdfDoc.embedFont(StandardFonts.HelveticaBold);
+
+      const mahasiswa = ijazah.mahasiswa;
+      const prodi = mahasiswa?.prodi;
+      const jenjang = prodi?.jenjang ? prodi.jenjang.toUpperCase() : '';
+      const prodiFull = prodi
+        ? `${prodi.namaProdi}${prodi.jenjang ? ` (${prodi.jenjang})` : ''}`
+        : '-';
+
+      const nama = mahasiswa?.nama || '-';
+      const nim = mahasiswa?.nim || '-';
+      const fakultas = DEFAULT_FAKULTAS;
+
+      const ipkText =
+        ijazah.ipk === null || ijazah.ipk === undefined
+          ? '-'
+          : Number(ijazah.ipk).toFixed(2);
+      const predikat = derivePredikat(ijazah.ipk);
+
+      const tanggalLulusText = ijazah.tanggalLulus
+        ? dayjs(ijazah.tanggalLulus).format('DD MMMM YYYY')
+        : '-';
+      const tahunLulus =
+        mahasiswa?.tahunLulus ||
+        (ijazah.tanggalLulus ? dayjs(ijazah.tanggalLulus).year() : null);
+
+      const ijazahHash =
+        ijazah.blockchainRecord?.ijazahHash || computeIjazahHash(ijazah);
+      const verifyUrl = buildVerificationUrl(ijazahHash);
+
+      const qrDataUrl = await QRCode.toDataURL(verifyUrl, { margin: 0.8, scale: 6 });
+      const qrBytes = Buffer.from(qrDataUrl.split(',')[1], 'base64');
+      const qrImg = await pdfDoc.embedPng(qrBytes);
+
+      const pageWidth = page.getWidth();
+      const pageHeight = page.getHeight();
+      const left = 90;
+      const headerY = pageHeight - 110;
+      const bodyStartY = headerY - 60;
+      const lineHeight = 18;
+      const labelX = left;
+      const valueX = left + 130;
+      const textColor = rgb(0.15, 0.15, 0.17);
+      const mutedColor = rgb(0.35, 0.35, 0.4);
+
+      const ijazahTitle = jenjang
+        ? `IJAZAH ${jenjang}`
+        : 'IJAZAH SARJANA';
+
+      page.drawText(CAMPUS_NAME.toUpperCase(), {
+        x: left,
+        y: headerY,
+        size: 12,
+        font: fontBold,
+        color: textColor,
+      });
+
+      page.drawText(ijazahTitle, {
+        x: left,
+        y: headerY - 18,
+        size: 16,
+        font: fontBold,
+        color: textColor,
+      });
+
+      page.drawText(`Nomor: ${ijazah.nomorIjazah}`, {
+        x: left,
+        y: headerY - 36,
+        size: 10,
+        font: fontRegular,
+        color: mutedColor,
+      });
+
+      let currentY = bodyStartY;
+
+      page.drawText('Dengan ini menyatakan bahwa:', {
+        x: left,
+        y: currentY,
+        size: 12,
+        font: fontRegular,
+        color: textColor,
+      });
+
+      currentY -= 28;
+
+      const drawRow = (label, value) => {
+        page.drawText(label, {
+          x: labelX,
+          y: currentY,
+          size: 12,
+          font: fontBold,
+          color: textColor,
+        });
+        page.drawText(String(value ?? '-'), {
+          x: valueX,
+          y: currentY,
+          size: 12,
+          font: fontRegular,
+          color: textColor,
+        });
+        currentY -= lineHeight;
+      };
+
+      drawRow('Nama', nama.toUpperCase());
+      drawRow('NIM', nim);
+      drawRow('Program Studi', prodiFull);
+      drawRow('Fakultas', fakultas);
+      drawRow('IPK', ipkText);
+      drawRow('Predikat', predikat);
+      drawRow('Tanggal Lulus', tanggalLulusText);
+      drawRow('Tahun Lulus', tahunLulus || '-');
+
+      currentY -= 8;
+      page.drawText(
+        'Berhak memperoleh ijazah sesuai ketentuan akademik.',
+        {
+          x: left,
+          y: currentY,
+          size: 10,
+          font: fontRegular,
+          color: mutedColor,
+        }
+      );
+
+      const qrWidth = 120;
+      const qrHeight = 120;
+      const qrX = pageWidth - 190;
+      const qrY = 140;
+
+      page.drawText('VERIFIKASI', {
+        x: qrX,
+        y: qrY + qrHeight + 18,
+        size: 10,
+        font: fontBold,
+        color: textColor,
+      });
+
+      page.drawImage(qrImg, { x: qrX, y: qrY, width: qrWidth, height: qrHeight });
+
+      page.drawText('Scan untuk verifikasi', {
+        x: qrX - 2,
+        y: qrY - 12,
+        size: 9,
+        font: fontRegular,
+        color: mutedColor,
+      });
+
+      const hashShort = ijazahHash
+        ? `${ijazahHash.slice(0, 10)}...${ijazahHash.slice(-6)}`
+        : '-';
+
+      page.drawText(`Hash: ${hashShort}`, {
+        x: qrX,
+        y: qrY - 26,
+        size: 8.5,
+        font: fontRegular,
+        color: mutedColor,
+      });
+
+      const pdfBytes = await pdfDoc.save();
+
+      res.setHeader('Content-Type', 'application/pdf');
+      res.setHeader(
+        'Content-Disposition',
+        `attachment; filename="${ijazah.nomorIjazah}.pdf"`
+      );
+
+      return res.send(Buffer.from(pdfBytes));
+    } catch (err) {
+      console.error('Error download ijazah PDF:', err);
+      return res.status(500).json({
+        success: false,
+        message: 'Gagal generate ijazah',
       });
     }
   },
@@ -505,7 +1054,7 @@ const IjazahController = {
       }
 
       // Hanya ijazah yang sudah TERVALIDASI yang boleh di-mint
-      if (ijazah.statusValidasi !== 'TERVALIDASI') {
+      if (ijazah.statusValidasi !== STATUS_VALIDASI.TERVALIDASI) {
         return res.status(400).json({
           success: false,
           message: `Ijazah dengan status ${ijazah.statusValidasi} belum bisa di-mint ke blockchain. Harus TERVALIDASI dulu.`,
@@ -594,7 +1143,11 @@ const IjazahController = {
       });
     } catch (error) {
       console.error("Error publishOnchain Ijazah:", error);
-      return res.status(500).json({
+      const isValidationError =
+        error?.message &&
+        error.message.toLowerCase().includes('belum tervalidasi');
+
+      return res.status(isValidationError ? 400 : 500).json({
         success: false,
         message:
           error.message ||
