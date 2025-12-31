@@ -31,6 +31,12 @@ router.get(
 );
 
 router.get(
+  '/:id/download',
+  roleMiddleware(['ADMIN', 'VALIDATOR', 'MAHASISWA']),
+  IjazahController.downloadPdf
+);
+
+router.get(
   '/:id',
   roleMiddleware(['ADMIN', 'VALIDATOR']),
   IjazahController.detail
@@ -53,6 +59,32 @@ router.post(
   '/:id/kirim-validasi',
   roleMiddleware(['ADMIN']),
   IjazahController.kirimValidasi
+);
+
+// Admin validasi
+router.post(
+  '/:id/validasi/admin-approve',
+  roleMiddleware(['ADMIN']),
+  IjazahController.approveByAdmin
+);
+
+router.post(
+  '/:id/validasi/admin-reject',
+  roleMiddleware(['ADMIN']),
+  IjazahController.rejectByAdmin
+);
+
+// Validator validasi
+router.post(
+  '/:id/validasi/validator-approve',
+  roleMiddleware(['VALIDATOR']),
+  IjazahController.approveByValidator
+);
+
+router.post(
+  '/:id/validasi/validator-reject',
+  roleMiddleware(['VALIDATOR']),
+  IjazahController.rejectByValidator
 );
 
 // VALIDATOR & ADMIN: melakukan validasi (setujui / tolak)

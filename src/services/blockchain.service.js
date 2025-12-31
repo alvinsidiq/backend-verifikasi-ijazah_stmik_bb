@@ -115,6 +115,13 @@ async function publishIjazahToBlockchain(ijazahId) {
     throw new Error("Ijazah tidak ditemukan");
   }
 
+  // Wajib tervalidasi penuh sebelum publish ke blockchain
+  if (ijazah.statusValidasi !== "TERVALIDASI") {
+    throw new Error(
+      "Ijazah belum tervalidasi lengkap oleh Admin dan Validator. StatusValidasi harus TERVALIDASI sebelum publish ke blockchain."
+    );
+  }
+
   // Kalau sudah pernah di-SUCCESS-kan, tidak usah kirim lagi
   if (
     ijazah.blockchainRecord &&

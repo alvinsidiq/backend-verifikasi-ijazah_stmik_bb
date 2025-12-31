@@ -87,11 +87,25 @@ const MahasiswaController = {
         tahunLulus,
         tempatLahir,
         tanggalLahir,
+        alamat,
+        noTelepon,
+        foto,
+        status,
       } = req.body;
+
+      const fotoPath = req.file
+        ? `/uploads/mahasiswa/${req.file.filename}`
+        : null;
 
       prodiId = prodiId ? Number(prodiId) : null;
       tahunMasuk = tahunMasuk ? Number(tahunMasuk) : null;
       tahunLulus = tahunLulus ? Number(tahunLulus) : null;
+
+      const mahasiswaEmail =
+        req.body.mahasiswaEmail ??
+        req.body.emailMahasiswa ??
+        req.body.emailKontak ??
+        req.body.email;
 
       // ✅ VALIDASI WAJIB
       if (!email || !password || !nim || !nama || !prodiId || !tahunMasuk) {
@@ -149,11 +163,16 @@ const MahasiswaController = {
           userId: user.id,
           nim,
           nama,
-          prodiId,
+          prodi: { connect: { id: prodiId } },
           tahunMasuk,
           tahunLulus: tahunLulus || null,
           tempatLahir: tempatLahir || null,
           tanggalLahir: tanggalLahir ? new Date(tanggalLahir) : null,
+          alamat: alamat || null,
+          email: mahasiswaEmail || null,
+          noTelepon: noTelepon || null,
+          foto: fotoPath ?? (foto || null),
+          status: status || 'AKTIF',
         },
         include: {
           prodi: true,
@@ -223,25 +242,53 @@ const MahasiswaController = {
         tahunLulus,
         tempatLahir,
         tanggalLahir,
+        alamat,
+        email,
+        noTelepon,
+        foto,
+        status,
       } = req.body;
+
+      const fotoPath = req.file
+        ? `/uploads/mahasiswa/${req.file.filename}`
+        : undefined;
+
+      const prodiIdNumber = prodiId ? Number(prodiId) : null;
+
+      const dataToUpdate = {
+        nim: nim ?? existing.nim,
+        nama: nama ?? existing.nama,
+        tahunMasuk: tahunMasuk ? Number(tahunMasuk) : existing.tahunMasuk,
+        tahunLulus: tahunLulus !== undefined
+          ? (tahunLulus ? Number(tahunLulus) : null)
+          : existing.tahunLulus,
+        tempatLahir: tempatLahir !== undefined
+          ? (tempatLahir || null)
+          : existing.tempatLahir,
+        tanggalLahir: tanggalLahir !== undefined
+          ? (tanggalLahir ? new Date(tanggalLahir) : null)
+          : existing.tanggalLahir,
+        alamat: alamat !== undefined ? (alamat || null) : existing.alamat,
+        email: email !== undefined ? (email || null) : existing.email,
+        noTelepon: noTelepon !== undefined ? (noTelepon || null) : existing.noTelepon,
+        status: status !== undefined ? (status || null) : existing.status,
+      };
+
+      if (prodiIdNumber) {
+        dataToUpdate.prodi = { connect: { id: prodiIdNumber } };
+      }
+
+      if (fotoPath !== undefined) {
+        dataToUpdate.foto = fotoPath;
+      } else if (foto !== undefined) {
+        dataToUpdate.foto = foto || null;
+      } else {
+        dataToUpdate.foto = existing.foto;
+      }
 
       const updated = await prisma.mahasiswa.update({
         where: { id },
-        data: {
-          nim: nim ?? existing.nim,
-          nama: nama ?? existing.nama,
-          prodiId: prodiId ? Number(prodiId) : existing.prodiId,
-          tahunMasuk: tahunMasuk ? Number(tahunMasuk) : existing.tahunMasuk,
-          tahunLulus: tahunLulus !== undefined
-            ? (tahunLulus ? Number(tahunLulus) : null)
-            : existing.tahunLulus,
-          tempatLahir: tempatLahir !== undefined
-            ? (tempatLahir || null)
-            : existing.tempatLahir,
-          tanggalLahir: tanggalLahir !== undefined
-            ? (tanggalLahir ? new Date(tanggalLahir) : null)
-            : existing.tanggalLahir,
-        },
+        data: dataToUpdate,
         include: {
           user: true,
           prodi: true,

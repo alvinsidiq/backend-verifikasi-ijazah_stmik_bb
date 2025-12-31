@@ -3,6 +3,7 @@ const express = require('express');
 const MahasiswaController = require('../controllers/mahasiswa.controller');
 const authMiddleware = require('../middlewares/authMiddleware');
 const roleMiddleware = require('../middlewares/roleMiddleware');
+const uploadFotoMahasiswa = require('../middlewares/uploadFotoMahasiswa.middleware');
 
 const router = express.Router();
 
@@ -37,12 +38,14 @@ router.get(
 router.post(
   '/',
   roleMiddleware(['ADMIN']),
+  uploadFotoMahasiswa.single('foto'),
   MahasiswaController.create
 );
 
 router.put(
   '/:id',
   roleMiddleware(['ADMIN']),
+  uploadFotoMahasiswa.single('foto'),
   MahasiswaController.update
 );
 

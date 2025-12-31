@@ -2,11 +2,15 @@
 const express = require('express');
 const cors = require('cors');
 const morgan = require('morgan');
+const path = require('path');
 const programStudiRoutes = require('./routes/programStudi.routes');
 const mahasiswaRoutes = require('./routes/mahasiswa.routes');
 const ijazahRoutes = require('./routes/ijazah.routes');
 const verifikasiRoutes = require('./routes/verifikasi.routes');
 const validatorRoutes = require('./routes/validator.routes');
+const authMiddleware = require('./middlewares/authMiddleware');
+const roleMiddleware = require('./middlewares/roleMiddleware');
+const IjazahController = require('./controllers/ijazah.controller');
 
 
 require('dotenv').config();
@@ -28,6 +32,7 @@ app.use((req, res, next) => {
 app.use(cors());
 app.use(morgan('dev'));
 app.use(express.json());
+app.use('/uploads', express.static(path.join(__dirname, '..', 'uploads')));
 
 
 // routes
@@ -51,6 +56,14 @@ app.use('/mahasiswa', mahasiswaRoutes);
 
 // route ijazah
 app.use('/ijazah', ijazahRoutes);
+
+// alias khusus download (akses /api/ijazah/:id/download)
+app.get(
+  '/api/ijazah/:id/download',
+  authMiddleware,
+  roleMiddleware(['ADMIN', 'VALIDATOR', 'MAHASISWA']),
+  IjazahController.downloadPdf
+);
 
 // route validator
 app.use('/validator', validatorRoutes);
