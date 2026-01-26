@@ -36,6 +36,12 @@ router.get(
   IjazahController.downloadPdf
 );
 
+router.post(
+  '/:id/ipfs',
+  roleMiddleware(['ADMIN', 'VALIDATOR']),
+  IjazahController.uploadIjazahToIpfs
+);
+
 router.get(
   '/hash-nomor',
   roleMiddleware(['ADMIN']),

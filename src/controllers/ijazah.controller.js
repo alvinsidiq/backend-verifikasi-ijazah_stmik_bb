@@ -1,9 +1,11 @@
 // src/controllers/ijazah.controller.js
 const fs = require('fs');
 const path = require('path');
+const crypto = require("crypto");
 const prisma = require('../config/prisma');
 const { keccak256, toUtf8Bytes } = require("ethers");
 const { generateIjazahPdfBytes } = require("../services/ijazahPdf.service");
+const { uploadBufferToIpfs } = require("../services/ipfs.service");
 const {
   generateIjazahHash,
   storeIjazahDummy,
@@ -44,6 +46,10 @@ function computeNomorIjazahHash(nomorIjazah) {
   const s = String(nomorIjazah || "").trim();
   if (!s) return null;
   return keccak256(toUtf8Bytes(s));
+}
+
+function sha256Hex(buffer) {
+  return crypto.createHash("sha256").update(buffer).digest("hex");
 }
 
 function withJudulTa(data) {
@@ -946,6 +952,152 @@ const IjazahController = {
       return res.status(500).json({
         success: false,
         message: 'Gagal generate ijazah',
+      });
+    }
+  },
+
+  // POST /ijazah/:id/ipfs (ADMIN/VALIDATOR)
+  async uploadIjazahToIpfs(req, res) {
+    const rawId = req.params.id;
+    const id = Number(rawId);
+
+    if (!rawId || Number.isNaN(id)) {
+      return res.status(400).json({
+        success: false,
+        message: "ID tidak valid",
+      });
+    }
+
+    try {
+      const ijazah = await prisma.ijazah.findUnique({
+        where: { id },
+        include: {
+          mahasiswa: {
+            include: {
+              prodi: true,
+            },
+          },
+        },
+      });
+
+      if (!ijazah) {
+        return res.status(404).json({
+          success: false,
+          message: "Ijazah tidak ditemukan",
+        });
+      }
+
+      const st = (ijazah.statusValidasi || "").toString().toUpperCase();
+      if (st !== STATUS_VALIDASI.TERVALIDASI) {
+        return res.status(400).json({
+          success: false,
+          message: "Ijazah harus TERVALIDASI sebelum upload ke IPFS",
+        });
+      }
+
+      if (ijazah.ipfsStatus === "READY" && ijazah.ipfsCid && ijazah.ipfsUri) {
+        return res.json({
+          success: true,
+          data: {
+            ipfsCid: ijazah.ipfsCid,
+            ipfsUri: ijazah.ipfsUri,
+            ipfsGatewayUrl: ijazah.ipfsGatewayUrl,
+            ipfsStatus: ijazah.ipfsStatus,
+            ipfsUploadedAt: ijazah.ipfsUploadedAt,
+          },
+        });
+      }
+
+      await prisma.ijazah.update({
+        where: { id },
+        data: { ipfsStatus: "UPLOADING", ipfsError: null },
+      });
+
+      let nomorHash = ijazah.nomorIjazahHash;
+      if (!nomorHash) {
+        nomorHash = computeNomorIjazahHash(ijazah.nomorIjazah);
+        if (nomorHash) {
+          await prisma.ijazah.update({
+            where: { id },
+            data: { nomorIjazahHash: nomorHash },
+          });
+        }
+      }
+
+      if (!nomorHash) {
+        throw new Error("nomorIjazahHash gagal dibuat");
+      }
+
+      const qrUrl = buildPdfPublicUrl(nomorHash);
+      const refShort = `Ref: ${nomorHash.slice(0, 10)}...${nomorHash.slice(-6)}`;
+
+      const templatePath =
+        process.env.IJAZAH_TEMPLATE_PATH || DEFAULT_TEMPLATE_PATH;
+
+      const pdfBuffer = await generateIjazahPdfBytes({
+        ijazah,
+        templatePath,
+        campusName: CAMPUS_NAME,
+        fakultasName: DEFAULT_FAKULTAS,
+        qrUrl,
+        refText: refShort,
+      });
+
+      const pdfSha256 = sha256Hex(pdfBuffer);
+      const pdfSizeBytes = pdfBuffer.length;
+
+      const filenameSafe = `${ijazah.nomorIjazah}.pdf`.replace(/[^\w.\-]+/g, "_");
+      const { cid, uri, gatewayUrl } = await uploadBufferToIpfs({
+        buffer: pdfBuffer,
+        filename: filenameSafe,
+      });
+
+      const updated = await prisma.ijazah.update({
+        where: { id },
+        data: {
+          ipfsCid: cid,
+          ipfsUri: uri,
+          ipfsGatewayUrl: gatewayUrl,
+          ipfsStatus: "READY",
+          ipfsUploadedAt: new Date(),
+          ipfsError: null,
+          pdfSha256,
+          pdfSizeBytes,
+        },
+      });
+
+      return res.json({
+        success: true,
+        data: {
+          id: updated.id,
+          nomorIjazah: updated.nomorIjazah,
+          nomorIjazahHash: updated.nomorIjazahHash,
+          ipfsCid: updated.ipfsCid,
+          ipfsUri: updated.ipfsUri,
+          ipfsGatewayUrl: updated.ipfsGatewayUrl,
+          ipfsStatus: updated.ipfsStatus,
+          ipfsUploadedAt: updated.ipfsUploadedAt,
+          pdfSha256: updated.pdfSha256,
+          pdfSizeBytes: updated.pdfSizeBytes,
+        },
+      });
+    } catch (err) {
+      console.error("uploadIjazahToIpfs error:", err);
+
+      try {
+        await prisma.ijazah.update({
+          where: { id },
+          data: {
+            ipfsStatus: "FAILED",
+            ipfsError: String(err?.message || err),
+          },
+        });
+      } catch (_) {}
+
+      return res.status(500).json({
+        success: false,
+        message: "Gagal upload ijazah ke IPFS",
+        error: String(err?.message || err),
       });
     }
   },
