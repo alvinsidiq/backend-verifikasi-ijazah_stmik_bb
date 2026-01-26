@@ -20,6 +20,13 @@ enum Role {
   MAHASISWA
 }
 
+enum IpfsStatus {
+  NOT_UPLOADED
+  UPLOADING
+  READY
+  FAILED
+}
+
 model User {
 
    id           Int      @id @default(autoincrement())
@@ -88,6 +95,18 @@ model Ijazah {
   judulTa        String?
   fileUrl        String?
 
+  nomorIjazahHash String?        @unique
+
+  ipfsCid         String?
+  ipfsUri         String?
+  ipfsGatewayUrl  String?
+  ipfsStatus      IpfsStatus     @default(NOT_UPLOADED)
+  ipfsUploadedAt  DateTime?
+  ipfsError       String?
+
+  pdfSha256       String?
+  pdfSizeBytes    Int?
+
   statusValidasi String         @default("DRAFT")
 
   validatorId    Int?
@@ -111,12 +130,16 @@ model BlockchainRecord {
   ijazahId       Int           @unique
   ijazah         Ijazah        @relation(fields: [ijazahId], references: [id])
 
-  ijazahHash     String        @unique
+  ijazahHash      String        @unique
+  nomorIjazahHash String?
   contractAddress String?
   network        String
   txHash         String?
   blockNumber    Int?
+  chainId        Int?
   statusOnchain  StatusOnchain @default(DUMMY)
+  publishedAt    DateTime?
+  errorMessage   String?
   explorerUrl    String?
 
   createdAt      DateTime      @default(now())

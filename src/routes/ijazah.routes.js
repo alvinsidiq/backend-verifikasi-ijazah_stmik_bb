@@ -37,6 +37,12 @@ router.get(
 );
 
 router.get(
+  '/hash-nomor',
+  roleMiddleware(['ADMIN']),
+  IjazahController.hashNomorIjazah
+);
+
+router.get(
   '/:id',
   roleMiddleware(['ADMIN', 'VALIDATOR']),
   IjazahController.detail
@@ -53,6 +59,12 @@ router.put(
   '/:id',
   roleMiddleware(['ADMIN']),
   IjazahController.update
+);
+
+router.delete(
+  '/:id',
+  roleMiddleware(['ADMIN']),
+  IjazahController.deleteIjazah
 );
 
 router.post(
