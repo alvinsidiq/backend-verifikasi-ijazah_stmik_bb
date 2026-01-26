@@ -852,6 +852,53 @@ const IjazahController = {
     }
   },
 
+  // GET /ijazah/pdf?ref=<nomorIjazahHash>
+  async redirectPdfByRef(req, res) {
+    try {
+      const refRaw = (req.query.ref || "").toString().trim();
+      if (!refRaw) {
+        return res.status(400).send("ref wajib diisi");
+      }
+
+      let ref = refRaw;
+      if (!ref.startsWith("0x")) ref = "0x" + ref;
+
+      const ok = /^0x[0-9a-fA-F]{64}$/.test(ref);
+      if (!ok) {
+        return res.status(400).send("Format ref tidak valid");
+      }
+
+      const ijazah = await prisma.ijazah.findFirst({
+        where: { nomorIjazahHash: ref.toLowerCase() },
+        select: {
+          id: true,
+          nomorIjazah: true,
+          statusValidasi: true,
+          ipfsStatus: true,
+          ipfsGatewayUrl: true,
+          ipfsUri: true,
+        },
+      });
+
+      if (!ijazah) {
+        return res.status(404).send("Ijazah tidak ditemukan");
+      }
+
+      if (String(ijazah.ipfsStatus) !== "READY" || !ijazah.ipfsGatewayUrl) {
+        return res
+          .status(200)
+          .send(
+            `Dokumen belum tersedia di IPFS.<br/>Status IPFS: ${ijazah.ipfsStatus || "-"}<br/>Nomor: ${ijazah.nomorIjazah}`
+          );
+      }
+
+      return res.redirect(302, ijazah.ipfsGatewayUrl);
+    } catch (err) {
+      console.error("redirectPdfByRef error:", err);
+      return res.status(500).send("Terjadi kesalahan saat membuka dokumen");
+    }
+  },
+
   // GET /ijazah/:id/download  (ADMIN/VALIDATOR/MHS - tapi mhs hanya miliknya)
   async downloadPdf(req, res) {
     try {
