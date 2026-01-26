@@ -36,6 +36,9 @@ router.get(
   IjazahController.downloadPdf
 );
 
+// Public redirect endpoint for QR (no auth)
+router.get('/pdf', IjazahController.redirectPdfByRef);
+
 router.post(
   '/:id/ipfs',
   roleMiddleware(['ADMIN', 'VALIDATOR']),
