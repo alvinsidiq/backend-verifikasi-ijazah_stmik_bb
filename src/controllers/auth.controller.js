@@ -104,7 +104,7 @@ const AuthController = {
         });
       }
 
-      // Role yang diijinkan (harus sama dengan enum Role di Prisma)
+      //Role yang diijinkan (harus sama dengan enum Role di Prisma)
       const allowedRoles = ['ADMIN', 'VALIDATOR', 'MAHASISWA'];
 
       const finalRole = role && allowedRoles.includes(role)

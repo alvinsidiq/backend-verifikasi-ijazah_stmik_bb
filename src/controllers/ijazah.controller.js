@@ -1,16 +1,13 @@
 // src/controllers/ijazah.controller.js
 const fs = require('fs');
 const path = require('path');
-const dayjs = require('dayjs');
-require('dayjs/locale/id');
-const QRCode = require('qrcode');
-const { PDFDocument, StandardFonts, rgb } = require('pdf-lib');
 const prisma = require('../config/prisma');
+const { keccak256, toUtf8Bytes } = require("ethers");
+const { generateIjazahPdfBytes } = require("../services/ijazahPdf.service");
 const {
   generateIjazahHash,
   storeIjazahDummy,
   publishIjazahToBlockchain,
-  computeIjazahHash,
 } = require('../services/blockchain.service');
 const STATUS_VALIDASI = {
   DRAFT: 'DRAFT',
@@ -20,8 +17,6 @@ const STATUS_VALIDASI = {
   DITOLAK_VALIDATOR: 'DITOLAK_VALIDATOR',
 };
 
-dayjs.locale('id');
-
 const DEFAULT_TEMPLATE_PATH =
   process.env.IJAZAH_TEMPLATE_PATH ||
   path.join(__dirname, '..', '..', 'assets', 'templates', 'ijazah-template.pdf');
@@ -30,42 +25,25 @@ const CAMPUS_NAME = process.env.CAMPUS_NAME || 'STMIK Bandung Bali';
 const DEFAULT_FAKULTAS =
   process.env.CAMPUS_FAKULTAS_NAME || 'Fakultas Teknik';
 
-function buildVerificationUrl(hash) {
+function buildPdfPublicUrl(ref) {
   const base =
-    (process.env.VERIFICATION_PUBLIC_BASE_URL ||
-      'http://localhost:3000/verifikasi').trim();
+    (process.env.PDF_PUBLIC_BASE_URL ||
+      "http://localhost:3000/ijazah/pdf?ref={ref}").trim();
 
-  if (!hash) {
-    return base;
+  if (!ref) return base;
+  if (base.includes("{ref}")) return base.replace("{ref}", encodeURIComponent(ref));
+
+  if (base.includes("?")) {
+    const sep = base.endsWith("?") || base.endsWith("&") ? "" : "&";
+    return `${base}${sep}ref=${encodeURIComponent(ref)}`;
   }
-
-  if (base.includes('{hash}')) {
-    return base.replace('{hash}', encodeURIComponent(hash));
-  }
-
-  if (/[?&]hash=/.test(base)) {
-    if (base.trim().endsWith('hash=')) {
-      return `${base}${encodeURIComponent(hash)}`;
-    }
-    return base;
-  }
-
-  if (base.includes('?')) {
-    const separator = base.endsWith('?') || base.endsWith('&') ? '' : '&';
-    return `${base}${separator}hash=${encodeURIComponent(hash)}`;
-  }
-
-  return `${base.replace(/\/$/, '')}/${encodeURIComponent(hash)}`;
+  return `${base.replace(/\/$/, "")}/${encodeURIComponent(ref)}`;
 }
 
-function derivePredikat(ipk) {
-  if (ipk === null || ipk === undefined) return '-';
-  const num = Number(ipk);
-  if (!Number.isFinite(num)) return '-';
-  if (num >= 3.51) return 'Dengan Pujian';
-  if (num >= 3.01) return 'Sangat Memuaskan';
-  if (num >= 2.76) return 'Memuaskan';
-  return 'Lulus';
+function computeNomorIjazahHash(nomorIjazah) {
+  const s = String(nomorIjazah || "").trim();
+  if (!s) return null;
+  return keccak256(toUtf8Bytes(s));
 }
 
 function withJudulTa(data) {
@@ -100,6 +78,19 @@ function getJudulTaFromBody(body = {}) {
   return undefined;
 }
 
+function normalizeStatus(raw) {
+  if (!raw) return null;
+  const s = raw.toString().trim().toUpperCase();
+
+  // alias untuk kompatibilitas (kalau FE lama masih pakai)
+  if (s === "MENUNGGU") return "APPROVED_ADMIN";
+  if (s === "PENDING") return "APPROVED_ADMIN";
+  if (s === "MENUNGGU_VALIDASI") return "APPROVED_ADMIN";
+
+  if (s === "DITOLAK") return "DITOLAK_VALIDATOR"; // fallback legacy
+  return s;
+}
+
 async function handleValidasiUpdate(req, res) {
   try {
     const id = parseInt(req.params.id, 10);
@@ -113,6 +104,8 @@ async function handleValidasiUpdate(req, res) {
     }
 
     const finalStatus = (statusValidasi || status || '').toString().toUpperCase();
+    const normalizedStatus = finalStatus === "DITOLAK" ? "DITOLAK_VALIDATOR" : finalStatus;
+
     if (!finalStatus) {
       return res.status(400).json({
         success: false,
@@ -120,7 +113,7 @@ async function handleValidasiUpdate(req, res) {
       });
     }
 
-    if (![STATUS_VALIDASI.TERVALIDASI, STATUS_VALIDASI.DITOLAK_VALIDATOR].includes(finalStatus)) {
+    if (![STATUS_VALIDASI.TERVALIDASI, STATUS_VALIDASI.DITOLAK_VALIDATOR].includes(normalizedStatus)) {
       return res.status(400).json({
         success: false,
         message: `Status validasi harus ${STATUS_VALIDASI.TERVALIDASI} atau ${STATUS_VALIDASI.DITOLAK_VALIDATOR}`,
@@ -150,7 +143,7 @@ async function handleValidasiUpdate(req, res) {
     const updated = await prisma.ijazah.update({
       where: { id },
       data: {
-        statusValidasi: finalStatus,
+        statusValidasi: normalizedStatus,
         validatorId,
         catatanValidasi: catatan || null,
         validatedAt: new Date(),
@@ -167,7 +160,7 @@ async function handleValidasiUpdate(req, res) {
 
     return res.json({
       success: true,
-      message: `Ijazah berhasil diupdate ke status ${finalStatus}`,
+      message: `Ijazah berhasil diupdate ke status ${normalizedStatus}`,
       data: withJudulTa(updated),
     });
   } catch (err) {
@@ -184,12 +177,29 @@ const IjazahController = {
   // GET /ijazah?status=APPROVED_ADMIN&nim=201801234
   async list(req, res) {
     try {
-      const { status, nim } = req.query;
+      const { nim } = req.query;
+
+      const statusNorm = normalizeStatus(req.query.status);
+
+      const VALID = new Set([
+        "DRAFT",
+        "APPROVED_ADMIN",
+        "TERVALIDASI",
+        "DITOLAK_ADMIN",
+        "DITOLAK_VALIDATOR",
+      ]);
+
+      if (statusNorm && !VALID.has(statusNorm)) {
+        return res.status(400).json({
+          success: false,
+          message: `Status filter tidak valid: ${statusNorm}`,
+        });
+      }
 
       const where = {};
 
-      if (status) {
-        where.statusValidasi = status;
+      if (statusNorm) {
+        where.statusValidasi = statusNorm;
       }
 
       if (nim) {
@@ -223,6 +233,40 @@ const IjazahController = {
       return res.status(500).json({
         success: false,
         message: 'Terjadi kesalahan pada server',
+      });
+    }
+  },
+
+  // GET /ijazah/hash-nomor?nomorIjazah=...
+  async hashNomorIjazah(req, res) {
+    try {
+      const nomorIjazah =
+        req.query.nomorIjazah ||
+        req.query.nomor ||
+        req.query.no ||
+        req.body?.nomorIjazah;
+
+      if (!nomorIjazah) {
+        return res.status(400).json({
+          success: false,
+          message: "nomorIjazah wajib diisi",
+        });
+      }
+
+      const hash = computeNomorIjazahHash(nomorIjazah);
+
+      return res.json({
+        success: true,
+        data: {
+          nomorIjazah: String(nomorIjazah),
+          nomorIjazahHash: hash,
+        },
+      });
+    } catch (err) {
+      console.error("Error hashNomorIjazah:", err);
+      return res.status(500).json({
+        success: false,
+        message: "Terjadi kesalahan pada server",
       });
     }
   },
@@ -310,6 +354,7 @@ const IjazahController = {
 
       const sanitizedIpk = Number.isFinite(parsedIpk) ? parsedIpk : null;
       const finalStatus = STATUS_VALIDASI.DRAFT;
+      const nomorIjazahHash = computeNomorIjazahHash(nomorIjazah);
 
       const newIjazah = await prisma.ijazah.create({
         data: {
@@ -324,6 +369,8 @@ const IjazahController = {
                 ? null
                 : judulTaInput,
           fileUrl: fileUrl || null,
+          nomorIjazahHash,
+          ipfsStatus: "NOT_UPLOADED",
           statusValidasi: finalStatus,
         },
         include: {
@@ -394,6 +441,18 @@ const IjazahController = {
       if (mahasiswaId) data.mahasiswaId = Number(mahasiswaId);
       if (nomorIjazah) data.nomorIjazah = nomorIjazah;
       if (tanggalLulus) data.tanggalLulus = new Date(tanggalLulus);
+      if (nomorIjazah) {
+        const h = computeNomorIjazahHash(nomorIjazah);
+        data.nomorIjazahHash = h;
+        data.ipfsCid = null;
+        data.ipfsUri = null;
+        data.ipfsGatewayUrl = null;
+        data.ipfsStatus = "NOT_UPLOADED";
+        data.ipfsUploadedAt = null;
+        data.ipfsError = null;
+        data.pdfSha256 = null;
+        data.pdfSizeBytes = null;
+      }
 
       if (judulTaInput !== undefined) {
         data.judulTa = judulTaInput === '' ? null : judulTaInput;
@@ -839,178 +898,49 @@ const IjazahController = {
         });
       }
 
-      const templateBytes = fs.readFileSync(templatePath);
-      const pdfDoc = await PDFDocument.load(templateBytes);
-      const [page] = pdfDoc.getPages();
-      const fontRegular = await pdfDoc.embedFont(StandardFonts.Helvetica);
-      const fontBold = await pdfDoc.embedFont(StandardFonts.HelveticaBold);
-
-      const mahasiswa = ijazah.mahasiswa;
-      const prodi = mahasiswa?.prodi;
-      const jenjang = prodi?.jenjang ? prodi.jenjang.toUpperCase() : '';
-      const prodiFull = prodi
-        ? `${prodi.namaProdi}${prodi.jenjang ? ` (${prodi.jenjang})` : ''}`
-        : '-';
-
-      const nama = mahasiswa?.nama || '-';
-      const nim = mahasiswa?.nim || '-';
-      const fakultas = DEFAULT_FAKULTAS;
-
-      const ipkText =
-        ijazah.ipk === null || ijazah.ipk === undefined
-          ? '-'
-          : Number(ijazah.ipk).toFixed(2);
-      const predikat = derivePredikat(ijazah.ipk);
-
-      const tanggalLulusText = ijazah.tanggalLulus
-        ? dayjs(ijazah.tanggalLulus).format('DD MMMM YYYY')
-        : '-';
-      const tahunLulus =
-        mahasiswa?.tahunLulus ||
-        (ijazah.tanggalLulus ? dayjs(ijazah.tanggalLulus).year() : null);
-
-      const ijazahHash =
-        ijazah.blockchainRecord?.ijazahHash || computeIjazahHash(ijazah);
-      const verifyUrl = buildVerificationUrl(ijazahHash);
-
-      const qrDataUrl = await QRCode.toDataURL(verifyUrl, { margin: 0.8, scale: 6 });
-      const qrBytes = Buffer.from(qrDataUrl.split(',')[1], 'base64');
-      const qrImg = await pdfDoc.embedPng(qrBytes);
-
-      const pageWidth = page.getWidth();
-      const pageHeight = page.getHeight();
-      const left = 90;
-      const headerY = pageHeight - 110;
-      const bodyStartY = headerY - 60;
-      const lineHeight = 18;
-      const labelX = left;
-      const valueX = left + 130;
-      const textColor = rgb(0.15, 0.15, 0.17);
-      const mutedColor = rgb(0.35, 0.35, 0.4);
-
-      const ijazahTitle = jenjang
-        ? `IJAZAH ${jenjang}`
-        : 'IJAZAH SARJANA';
-
-      page.drawText(CAMPUS_NAME.toUpperCase(), {
-        x: left,
-        y: headerY,
-        size: 12,
-        font: fontBold,
-        color: textColor,
-      });
-
-      page.drawText(ijazahTitle, {
-        x: left,
-        y: headerY - 18,
-        size: 16,
-        font: fontBold,
-        color: textColor,
-      });
-
-      page.drawText(`Nomor: ${ijazah.nomorIjazah}`, {
-        x: left,
-        y: headerY - 36,
-        size: 10,
-        font: fontRegular,
-        color: mutedColor,
-      });
-
-      let currentY = bodyStartY;
-
-      page.drawText('Dengan ini menyatakan bahwa:', {
-        x: left,
-        y: currentY,
-        size: 12,
-        font: fontRegular,
-        color: textColor,
-      });
-
-      currentY -= 28;
-
-      const drawRow = (label, value) => {
-        page.drawText(label, {
-          x: labelX,
-          y: currentY,
-          size: 12,
-          font: fontBold,
-          color: textColor,
+      if (
+        req.user?.role === "MAHASISWA" &&
+        ijazah.statusValidasi !== STATUS_VALIDASI.TERVALIDASI
+      ) {
+        return res.status(403).json({
+          success: false,
+          message: "Ijazah belum TERVALIDASI, belum bisa diunduh oleh mahasiswa.",
         });
-        page.drawText(String(value ?? '-'), {
-          x: valueX,
-          y: currentY,
-          size: 12,
-          font: fontRegular,
-          color: textColor,
-        });
-        currentY -= lineHeight;
-      };
+      }
 
-      drawRow('Nama', nama.toUpperCase());
-      drawRow('NIM', nim);
-      drawRow('Program Studi', prodiFull);
-      drawRow('Fakultas', fakultas);
-      drawRow('IPK', ipkText);
-      drawRow('Predikat', predikat);
-      drawRow('Tanggal Lulus', tanggalLulusText);
-      drawRow('Tahun Lulus', tahunLulus || '-');
-
-      currentY -= 8;
-      page.drawText(
-        'Berhak memperoleh ijazah sesuai ketentuan akademik.',
-        {
-          x: left,
-          y: currentY,
-          size: 10,
-          font: fontRegular,
-          color: mutedColor,
+      let nomorHash = ijazah.nomorIjazahHash;
+      if (!nomorHash) {
+        nomorHash = computeNomorIjazahHash(ijazah.nomorIjazah);
+        if (nomorHash) {
+          await prisma.ijazah.update({
+            where: { id: ijazah.id },
+            data: { nomorIjazahHash: nomorHash },
+          });
+          ijazah.nomorIjazahHash = nomorHash;
         }
-      );
+      }
 
-      const qrWidth = 120;
-      const qrHeight = 120;
-      const qrX = pageWidth - 190;
-      const qrY = 140;
+      const qrUrl = buildPdfPublicUrl(nomorHash);
+      const refShort = nomorHash
+        ? `Ref: ${nomorHash.slice(0, 10)}...${nomorHash.slice(-6)}`
+        : null;
 
-      page.drawText('VERIFIKASI', {
-        x: qrX,
-        y: qrY + qrHeight + 18,
-        size: 10,
-        font: fontBold,
-        color: textColor,
+      const pdfBuffer = await generateIjazahPdfBytes({
+        ijazah,
+        templatePath,
+        campusName: CAMPUS_NAME,
+        fakultasName: DEFAULT_FAKULTAS,
+        qrUrl,
+        refText: refShort,
       });
 
-      page.drawImage(qrImg, { x: qrX, y: qrY, width: qrWidth, height: qrHeight });
-
-      page.drawText('Scan untuk verifikasi', {
-        x: qrX - 2,
-        y: qrY - 12,
-        size: 9,
-        font: fontRegular,
-        color: mutedColor,
-      });
-
-      const hashShort = ijazahHash
-        ? `${ijazahHash.slice(0, 10)}...${ijazahHash.slice(-6)}`
-        : '-';
-
-      page.drawText(`Hash: ${hashShort}`, {
-        x: qrX,
-        y: qrY - 26,
-        size: 8.5,
-        font: fontRegular,
-        color: mutedColor,
-      });
-
-      const pdfBytes = await pdfDoc.save();
-
-      res.setHeader('Content-Type', 'application/pdf');
+      res.setHeader("Content-Type", "application/pdf");
       res.setHeader(
-        'Content-Disposition',
+        "Content-Disposition",
         `attachment; filename="${ijazah.nomorIjazah}.pdf"`
       );
 
-      return res.send(Buffer.from(pdfBytes));
+      return res.send(pdfBuffer);
     } catch (err) {
       console.error('Error download ijazah PDF:', err);
       return res.status(500).json({
@@ -1072,6 +1002,9 @@ const IjazahController = {
 
       // Generate hash ijazah dari data mahasiswa + prodi + ijazah
       const ijazahHash = generateIjazahHash(ijazah, ijazah.mahasiswa);
+      const nomorIjazahHash = keccak256(
+        toUtf8Bytes(ijazah.nomorIjazah || "")
+      );
 
       // Dummy kirim ke "blockchain"
       const bcResult = storeIjazahDummy(ijazahHash, ijazah.id);
@@ -1081,6 +1014,7 @@ const IjazahController = {
         data: {
           ijazahId: ijazah.id,
           ijazahHash: bcResult.ijazahHash,
+          nomorIjazahHash,
           contractAddress: bcResult.contractAddress,
           network: bcResult.network,
           txHash: bcResult.txHash,
@@ -1102,6 +1036,7 @@ const IjazahController = {
           blockNumber: blockchainRecord.blockNumber,
           statusOnchain: blockchainRecord.statusOnchain,
           explorerUrl: blockchainRecord.explorerUrl,
+          nomorIjazahHash: blockchainRecord.nomorIjazahHash,
         },
       });
     } catch (err) {
@@ -1115,44 +1050,125 @@ const IjazahController = {
  
   async publishOnchain(req, res) {
     try {
-      const { id } = req.params;
+      const rawId = req.params.id;
 
-      if (!id) {
+      if (!rawId) {
         return res.status(400).json({
           success: false,
           message: "Parameter id ijazah wajib diisi",
+          error: "Parameter id ijazah wajib diisi",
+        });
+      }
+
+      const id = parseInt(rawId, 10);
+
+      if (Number.isNaN(id)) {
+        return res.status(400).json({
+          success: false,
+          message: "ID ijazah tidak valid",
+          error: "ID ijazah harus berupa angka",
+        });
+      }
+
+      const ijazah = await prisma.ijazah.findUnique({
+        where: { id },
+        select: { id: true, statusValidasi: true },
+      });
+
+      if (!ijazah) {
+        return res.status(404).json({
+          success: false,
+          message: "Ijazah tidak ditemukan",
+          error: "Ijazah tidak ditemukan",
+        });
+      }
+
+      if (ijazah.statusValidasi !== STATUS_VALIDASI.TERVALIDASI) {
+        return res.status(400).json({
+          success: false,
+          message: "Ijazah harus TERVALIDASI sebelum publish on-chain",
+          error: "StatusValidasi harus TERVALIDASI",
         });
       }
 
       const result = await publishIjazahToBlockchain(id);
 
-      if (result.alreadyOnchain) {
-        return res.status(200).json({
-          success: true,
-          message:
-            "Ijazah sudah pernah tercatat di blockchain sebelumnya",
-          data: result,
-        });
-      }
+      const responseData = {
+        txHash: result.txHash,
+        nomorIjazahHash: result.nomorIjazahHash,
+        alreadyOnchain: result.alreadyOnchain,
+        statusOnchain: result.statusOnchain,
+        network: result.network,
+        chainId: result.chainId,
+        blockNumber: result.blockNumber,
+        publishedAt: result.publishedAt,
+      };
 
       return res.status(200).json({
         success: true,
-        message:
-          "Ijazah berhasil dipublish ke blockchain dan disimpan di BlockchainRecord",
-        data: result,
+        message: result.alreadyOnchain
+          ? "Ijazah sudah pernah tercatat di blockchain sebelumnya"
+          : "Ijazah berhasil dipublish ke blockchain dan disimpan di BlockchainRecord",
+        data: responseData,
       });
     } catch (error) {
       console.error("Error publishOnchain Ijazah:", error);
       const isValidationError =
         error?.message &&
-        error.message.toLowerCase().includes('belum tervalidasi');
+        error.message.toLowerCase().includes("tervalidasi");
 
       return res.status(isValidationError ? 400 : 500).json({
         success: false,
-        message:
-          error.message ||
+        message: isValidationError
+          ? "Ijazah harus TERVALIDASI sebelum publish on-chain"
+          : "Gagal publish on-chain",
+        error:
+          error?.message ||
           "Terjadi kesalahan saat mempublish ijazah ke blockchain",
       });
+    }
+  },
+
+  async deleteIjazah(req, res) {
+    try {
+      const id = parseInt(req.params.id, 10);
+
+      if (isNaN(id)) {
+        return res.status(400).json({
+          success: false,
+          message: 'ID tidak valid',
+        });
+      }
+
+      const ijazah = await prisma.ijazah.findUnique({
+        where: { id },
+        select: { id: true, statusValidasi: true },
+      });
+
+      if (!ijazah) {
+        return res.status(404).json({ success: false, message: "Ijazah tidak ditemukan" });
+      }
+
+      const st = (ijazah.statusValidasi || "").toString().toUpperCase();
+
+      const bolehHapus = ["DRAFT", "DITOLAK_ADMIN", "DITOLAK_VALIDATOR"].includes(st);
+      if (!bolehHapus) {
+        return res.status(400).json({
+          success: false,
+          message: `Ijazah tidak bisa dihapus pada status: ${st}`,
+        });
+      }
+
+      // Hapus record blockchain record kalau ada (biar tidak orphan)
+      await prisma.blockchainRecord.deleteMany({ where: { ijazahId: id } });
+
+      // Hapus ijazah (mahasiswa/prodi tidak dihapus karena relasi)
+      await prisma.ijazah.delete({ where: { id } });
+
+      return res.status(200).json({ success: true, data: { id } });
+    } catch (err) {
+      console.error("deleteIjazah error:", err);
+      return res.status(500).json({ success: false, message: "Gagal menghapus ijazah" });
     }
   },
 };
